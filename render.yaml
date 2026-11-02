@@ -1,0 +1,53 @@
+# Render blueprint for MarketDesk alerting (Xauusd14355).
+#
+# WHY A CRON JOB AND NOT A WEB SERVICE
+# MarketDesk has no HTTP server -- it is a CLI plus a watch loop. A Render *web*
+# service would also sleep after ~15 minutes with no inbound traffic, and a
+# long poll is outbound traffic, so it would not count as activity. A cron job
+# runs one pass per trigger and exits, which is exactly the shape of `watch`.
+#
+# COST: Render Cron Jobs and Background Workers have NO free instance type; a
+# cron service bills ~$1/month minimum, prorated by the second. The Free tier
+# covers static sites and web services only.
+#
+# STATE: the alert dedupe ledger lives under DESK_HOME. Without a mounted disk it
+# is lost on every restart, so a signal already sent could be re-sent. Mount a
+# Render Disk at /var/data (paid) or accept the reset deliberately.
+services:
+  - type: cron
+    name: marketdesk-watch
+    runtime: python
+    schedule: "*/15 * * * *"          # one reading every 15 minutes
+    # Render runs both commands from the REPO ROOT. The package lives in
+    # marketdesk/, so either install it or cd into it. We do both: the install
+    # makes `desk` importable anywhere, and the cd still works if the install
+    # did not take effect. Verified from a fresh clone -- from the repo root
+    # without either, it fails with "No module named 'desk'".
+    buildCommand: "pip install -e marketdesk"
+    startCommand: "cd marketdesk && python3 -m desk.cli watch"
+    envVars:
+      # Secrets are declared with sync:false so they are set in the Render
+      # dashboard and never written to git.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      # Durable state (shared.db, signal_ledger.json, agent memories). Point at
+      # a mounted disk to survive restarts; otherwise it rebuilds each run.
+      - key: DESK_HOME
+        value: /var/data
+      - key: DESK_SYMBOL
+        value: XAUUSD
+      # Alert only on a real, actionable signal above this conviction.
+      - key: DESK_ALERT_SCORE
+        value: "0.25"
+      # A setup is stated only if reward exceeds risk by this factor.
+      - key: DESK_MIN_RR
+        value: "1.5"
+      # The gate closes only for an event this close, in the instrument's currency.
+      - key: DESK_EVENT_WINDOW_H
+        value: "6"
+      - key: PYTHON_VERSION
+        value: "3.13.15"
