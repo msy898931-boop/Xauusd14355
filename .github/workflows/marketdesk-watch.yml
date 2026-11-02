@@ -1,0 +1,69 @@
+# Run the MarketDesk watch loop on a schedule, from GitHub itself.
+#
+# WHY THIS INSTEAD OF RENDER
+# MarketDesk has no HTTP server -- it is a CLI plus a watch loop -- so it needs
+# a scheduler, not a web service. GitHub Actions gives one for free on a public
+# repository, with no credit card and no extra account.
+#
+# WHAT THE OWNER MUST DO ONCE (3 repo secrets, Settings -> Secrets -> Actions):
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, GROQ_API_KEY
+# Without them the run still succeeds but the desk stays silent by design.
+#
+# HONEST LIMITS (do not describe this as a precise 24/7 schedule):
+#   * GitHub's `schedule` is best-effort -- it can start 5-15+ minutes late under
+#     load, and it is skipped entirely if the previous run is still going.
+#   * Scheduled workflows are disabled after ~60 days with no repository
+#     activity; see keepalive.yml, which prevents that weekly.
+#   * A runner is a fresh VM each time, so there is no persistent disk. The
+#     dedupe ledger is carried in the Actions cache (best-effort), which is why
+#     a cache miss is not treated as a failure.
+name: marketdesk-watch
+
+on:
+  schedule:
+    # Every 15 minutes. GitHub cron is UTC and best-effort.
+    - cron: "*/15 * * * *"
+  # Manual trigger, for testing the pipeline end to end.
+  workflow_dispatch:
+
+# Never let two passes overlap: the second would race the first on the ledger.
+concurrency:
+  group: marketdesk-watch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Carry the dedupe ledger (and the SQLite store) between runs. The cache
+      # is the only durable storage a runner has; a miss costs a duplicate
+      # alert at worst, never a wrong one.
+      - name: Restore desk state
+        uses: actions/cache@v4
+        with:
+          path: marketdesk/data
+          key: desk-state-${{ github.run_id }}
+          restore-keys: |
+            desk-state-
+
+      - name: Install the desk
+        run: pip install -e marketdesk
+
+      - name: One watch pass
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        # One reading. Alerts only on an actionable signal above
+        # DESK_ALERT_SCORE, and never the same one twice.
+        run: python3 -m desk.cli watch
