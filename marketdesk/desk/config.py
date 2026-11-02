@@ -1,0 +1,105 @@
+"""Settings. One place for paths, the data source, and the LLM.
+
+Every value has an env override so the desk can run keyless, with no model, on
+any host. The shared store and each agent's private store live under one root
+(`DESK_HOME`) so a single directory holds all durable state.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+# Data source: biquote (keyless MT5 broker feed). The base is overridable so a
+# test or a future mirror can be pointed at without touching call sites.
+BIQUOTE_BASE = os.environ.get("DESK_BIQUOTE_BASE", "https://biquote.io")
+BIQUOTE_UA = "Mozilla/5.0 (compatible; MarketDesk/0.1)"
+
+# The symbol the desk reads by default; XAUUSD is what the owner trades.
+DEFAULT_SYMBOL = os.environ.get("DESK_SYMBOL", "XAUUSD")
+# Timeframes biquote serves, coarse -> fine. The orchestrator reads all of them.
+TIMEFRAMES = ("1d", "4h", "1h", "30m", "15m", "5m", "1m")
+
+# |score| below this is neutral, not a call. One constant so an agent's stance
+# and the orchestrator's verdict can never disagree about what "neutral" means.
+NEUTRAL_BAND = float(os.environ.get("DESK_NEUTRAL_BAND", "0.15"))
+
+# The model chain, best-first. Groq meters a separate daily token quota per
+# model, so listing several turns one model's spent quota into a rotation rather
+# than a silent fall back to computed prose. All four answered a 25-headline
+# labelling call; the reasoning model leads and the cheap fast ones back it up.
+DEFAULT_MODELS = ("openai/gpt-oss-120b", "openai/gpt-oss-20b",
+                  "qwen/qwen3.8-27b", "allam-2-7b")
+
+
+def _models_from_env() -> tuple[str, ...]:
+    """DESK_MODELS wins (comma-separated); DESK_MODEL replaces just the head."""
+    raw = os.environ.get("DESK_MODELS")
+    if raw:
+        return tuple(m.strip() for m in raw.split(",") if m.strip())
+    head = os.environ.get("DESK_MODEL")
+    if head:
+        return (head, *(m for m in DEFAULT_MODELS if m != head))
+    return DEFAULT_MODELS
+
+
+@dataclass
+class Settings:
+    symbol: str = DEFAULT_SYMBOL
+    home: Path = field(default_factory=lambda: Path(
+        os.environ.get("DESK_HOME", Path(__file__).resolve().parent.parent / "data")))
+    # Groq is the narrator/model layer. Unset key -> the desk still runs, agents
+    # fall back to their computed studies and say so.
+    groq_key: str = field(default_factory=lambda: os.environ.get("GROQ_API_KEY", ""))
+    # Groq meters a separate daily quota per model, so the desk keeps a chain and
+    # rotates down it when one model's quota is spent. `DESK_MODELS` overrides the
+    # whole list; `DESK_MODEL` overrides just the head.
+    models: tuple[str, ...] = field(default_factory=lambda: _models_from_env())
+    # A hard ceiling on wall-clock for one full run, so "fast" is a property of
+    # the build, not a hope. Agents run concurrently inside this budget.
+    budget_s: float = float(os.environ.get("DESK_BUDGET_S", "60"))
+    offline: bool = os.environ.get("DESK_OFFLINE") == "1"
+    # One source of truth for "what counts as neutral". Agents and the
+    # orchestrator both read this; a hardcoded 0.15 in each of them is how a
+    # specialist's stance and the final verdict drift apart.
+    neutral_band: float = NEUTRAL_BAND
+    # Coarse -> fine. Agents may request a subset via their own `frames`.
+    timeframes: tuple[str, ...] = TIMEFRAMES
+    # Symbols the correlation agent watches beside the traded one.
+    peers: tuple[str, ...] = ("XAGUSD", "EURUSD", "BTCUSD", "USOIL", "USDJPY")
+    # How close a high-impact event must be, in hours, to close the gate. The
+    # window is deliberately short: an event 20 hours out is not a reason to
+    # refuse a setup that resolves on the 15-minute chart.
+    event_window_h: float = float(os.environ.get("DESK_EVENT_WINDOW_H", "6"))
+    # Alerting. Empty by default: an unconfigured desk stays silent, never
+    # half-alerting. Values come from the environment and are never logged.
+    telegram_token: str = field(
+        default_factory=lambda: os.environ.get("TELEGRAM_BOT_TOKEN", ""))
+    telegram_chat_id: str = field(
+        default_factory=lambda: os.environ.get("TELEGRAM_CHAT_ID", ""))
+    # A signal is worth waking someone for only above this conviction.
+    alert_score: float = float(os.environ.get("DESK_ALERT_SCORE", "0.25"))
+    # A setup is only worth stating if reward exceeds risk by this factor. A plan
+    # whose nearest target sits closer than the stop is a losing proposition even
+    # when the direction is right.
+    min_rr: float = float(os.environ.get("DESK_MIN_RR", "1.5"))
+
+    @property
+    def shared_db(self) -> Path:
+        return self.home / "shared.db"
+
+    @property
+    def signal_ledger(self) -> Path:
+        return self.home / "signal_ledger.json"
+
+    @property
+    def agents_dir(self) -> Path:
+        return self.home / "agents"
+
+    def agent_dir(self, name: str) -> Path:
+        return self.agents_dir / name
+
+    def ensure_dirs(self) -> None:
+        self.home.mkdir(parents=True, exist_ok=True)
+        self.agents_dir.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,76 @@
+{
+  "symbol": "XAUUSD",
+  "source": "biquote (MT5 broker feed)",
+  "price": 3968.23,
+  "live": {
+    "mid": 3969.291,
+    "marketState": "open",
+    "stale": false,
+    "quoteAgeSeconds": 1,
+    "dayDiffPercent": 2.4116
+  },
+  "atr": {
+    "1h": 17.89,
+    "4h": 30.03,
+    "1d": 65.41
+  },
+  "supports": [
+    {
+      "level": 3964.44,
+      "kind": "pivot",
+      "why": "61.8% retracement of the 2025-04→2026-01 bull run (2956.3→5595.4)"
+    },
+    {
+      "level": 3955.87,
+      "kind": "pivot",
+      "why": "today's 4h low (02 Nov 16:00)"
+    },
+    {
+      "level": 3934.83,
+      "kind": "pivot",
+      "why": "today's session low (02 Nov 14:00 4h)"
+    },
+    {
+      "level": 3891.03,
+      "kind": "pivot",
+      "why": "today's early low (02 Nov 08:00 1h)"
+    },
+    {
+      "level": 3870.05,
+      "kind": "pivot",
+      "why": "the swing low (30 Oct 16:00 4h)"
+    }
+  ],
+  "resistances": [
+    {
+      "level": 3970.46,
+      "kind": "pivot",
+      "why": "today's high (02 Nov 16:00)"
+    },
+    {
+      "level": 3988.36,
+      "kind": "pivot",
+      "why": "23.6% of the 4082.99→3870.05 leg"
+    },
+    {
+      "level": 4004.2,
+      "kind": "pivot",
+      "why": "25 Oct high / 1h pivot"
+    },
+    {
+      "level": 4022.48,
+      "kind": "pivot",
+      "why": "26 Oct 1h pivot"
+    },
+    {
+      "level": 4034.24,
+      "kind": "pivot",
+      "why": "23 Oct high / 1h pivot"
+    },
+    {
+      "level": 4082.99,
+      "kind": "pivot",
+      "why": "28 Oct high — the leg's origin"
+    }
+  ]
+}

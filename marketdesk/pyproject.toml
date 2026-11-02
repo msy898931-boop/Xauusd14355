@@ -1,0 +1,22 @@
+[project]
+name = "marketdesk"
+version = "0.1.0"
+description = "Multi-agent market & news analysis desk (stdlib only)"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+marketdesk = "desk.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["desk", "desk.agents", "desk.sources"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
