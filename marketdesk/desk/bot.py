@@ -10,9 +10,11 @@ called. That keeps the whole thing free and serverless, at the cost of latency
 WHY THE OFFSET IS CONFIRMED ON TELEGRAM'S SIDE
 A runner is a fresh VM with no persistent disk, so a local "last seen" pointer
 would be lost between runs and every pass would replay the same updates. Telegram
-confirms updates with `offset` on `getUpdates`, so the runner advances the cursor
-in the same call that reads it and lets Telegram forget what it delivered. That
-makes the pass idempotent with no state of our own to lose.
+keeps the cursor instead: an update is confirmed only when a LATER `getUpdates`
+call passes a higher `offset`. Reading an update does not confirm it, and there
+is no separate "ack", so the pass must end by sending the offset back -- see
+`confirm()`. With the cursor at Telegram the pass is idempotent and there is no
+state of ours to lose.
 
 Replies go to the chat the request came from, which is also the only chat the
 bot will answer -- an unauthenticated button that spends a model quota is a way

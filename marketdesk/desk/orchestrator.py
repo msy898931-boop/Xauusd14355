@@ -51,7 +51,7 @@ def _pick_targets(levels: list[dict], entry: float, stop: float, min_rr: float,
     """
     risk = abs(entry - stop)
     if not risk:
-        return [{"level": l["level"], "kind": l["kind"]} for l in levels[:3]]
+        return [{"level": lvl["level"], "kind": lvl["kind"]} for lvl in levels[:3]]
     out = []
     for lv in levels:
         lvl = lv["level"]

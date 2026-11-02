@@ -51,6 +51,22 @@ an overrunning one is reported as timed-out, never as neutral.
 | `python3 -m desk.cli agents` | the roster, with weights |
 | `python3 -m desk.cli memory` | what is in the shared store |
 
+## Quality gates
+
+Three checks, run by `marketdesk-ci.yml` on every change and reproducible by
+hand from `marketdesk/`:
+
+```bash
+python3 -m pytest tests -q     # 74 tests, keyless and offline
+python3 -m mypy desk           # types
+python3 -m ruff check .        # lint
+```
+
+`mypy` is not decoration: it caught a real bug the tests missed (a dict used
+where a string was expected). Coverage is ~84%; `desk/sources/biquote.py` is the
+lowest because it is the one module that needs the network, and the tests are
+deliberately offline.
+
 ## The Telegram bot — the desk on demand
 
 A button menu in the chat. Press one and the desk answers on the next poll.
@@ -77,9 +93,11 @@ running with no server and no card; the design is deliberate.
 
 **The cursor lives at Telegram, not here.** A runner is a fresh VM with no disk,
 so a local "last seen" pointer would be lost and every pass would replay the
-same press. `getUpdates` carries the cursor forward in the same call, which makes
-each pass idempotent with no state of ours to lose. A press the pass did not
-reach is left unconfirmed, so Telegram redelivers it instead of dropping it.
+same press. Telegram confirms an update only when a *later* `getUpdates` call
+passes a higher offset — reading it is not enough — so the pass ends by sending
+the offset back. That makes each pass idempotent with no state of ours to lose.
+A press the pass did not reach is left unconfirmed, so Telegram redelivers it
+instead of dropping it.
 
 You can also just type: `/start` or `تحليل` or `توصية` — an unknown message
 shows the menu rather than being ignored. If the bot was quiet for a while the
