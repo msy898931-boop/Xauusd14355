@@ -25,6 +25,11 @@ on:
     - cron: "*/15 * * * *"
   # Manual trigger, for testing the pipeline end to end.
   workflow_dispatch:
+    inputs:
+      check_alerts:
+        description: "Send a real Telegram test message (proves the alert path)"
+        type: boolean
+        default: false
 
 # Never let two passes overlap: the second would race the first on the ledger.
 concurrency:
@@ -85,3 +90,14 @@ jobs:
         # One reading. Alerts only on an actionable signal above
         # DESK_ALERT_SCORE, and never the same one twice.
         run: python3 -m desk.cli watch
+
+      # Optional: proves the alert path end to end on demand, because a silent
+      # watch pass cannot tell "not configured" from "no signal yet". The
+      # getMe call is the only honest proof a token works.
+      - name: Send a test alert
+        if: ${{ inputs.check_alerts }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python3 -m desk.cli check-alerts --send
