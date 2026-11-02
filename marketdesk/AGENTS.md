@@ -109,6 +109,16 @@ python3 -m pytest tests -q          # 67 tests, keyless and offline
     only `load_studies` decodes its own column, so a caller reading the run row
     must decode it too (`_payload`). Reading it as a dict crashed the button on
     its first live press.
+25. **A typed message is a request too.** Answering only `callback_query`
+    updates meant a chat of 18 plain messages got total silence — the bug that
+    cost the owner a day of thinking the bot was broken. Unknown text shows the
+    menu, never nothing.
+26. **A backlog is folded, not flooded, and not dropped.** A quiet period can
+    leave a long queue; answering all of it floods the chat. The newest few are
+    answered, the older ones are confirmed and acknowledged in the first reply
+    with a count. Both extremes are wrong: silence loses the request, and a
+    burst of 18 replies is unreadable.
+
 
 ## Adding an agent
 Subclass `Agent` in `desk/agents/`, set `name`/`kind`/`weight`/`frames`,

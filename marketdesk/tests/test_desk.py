@@ -1253,3 +1253,83 @@ def test_bot_cli_exits_nonzero_when_the_pass_fails(tmp_path, monkeypatch):
 
     monkeypatch.setattr(TelegramBot, "_call", boom)
     assert cli.main(["bot", "--budget", "5"]) == 1
+
+
+def test_action_for_text_maps_commands_and_arabic_and_falls_back_to_menu():
+    from desk.bot import action_for_text
+    assert action_for_text("/start") == "menu"
+    assert action_for_text("/analysis") == "analysis"
+    assert action_for_text("تحليل") == "analysis"
+    assert action_for_text("توصية") == "recommend"
+    assert action_for_text("سوق") == "market"
+    assert action_for_text("أي شي غريب") == "menu"      # unknown -> the menu
+    assert action_for_text(None) == "menu"
+    assert action_for_text("  ") == "menu"
+
+
+def test_bot_answers_a_typed_message_not_just_a_button(tmp_path, monkeypatch):
+    """A person types; the bot must answer. Answering only callback presses made
+    a chat of 18 plain messages get total silence."""
+    from desk.bot import TelegramBot
+    updates = [{"update_id": 40, "message": {"text": "تحليل",
+                                             "chat": {"id": 933571066}}}]
+    bot, calls = _fake_bot(tmp_path, monkeypatch, updates=updates)
+    sent = []
+    monkeypatch.setattr(TelegramBot, "send",
+                        lambda self, text, **kw: sent.append((text, kw)) or True)
+
+    class FakeActions:
+        def __init__(self, *a, **k): pass
+        def run(self, action): return f"answer:{action}"
+
+    monkeypatch.setattr("desk.actions.Actions", FakeActions)
+    out = bot.poll()
+    assert out["handled"] == ["analysis"]
+    assert sent and sent[0][0] == "answer:analysis"
+    assert sent[0][1].get("keyboard") is False       # analysis, not the menu
+
+
+def test_bot_shows_the_menu_for_an_unknown_message(tmp_path, monkeypatch):
+    from desk.bot import TelegramBot
+    updates = [{"update_id": 41, "message": {"text": "مرحبا",
+                                             "chat": {"id": 933571066}}}]
+    bot, calls = _fake_bot(tmp_path, monkeypatch, updates=updates)
+    sent = []
+    monkeypatch.setattr(TelegramBot, "send",
+                        lambda self, text, **kw: sent.append((text, kw)) or True)
+
+    class FakeActions:
+        def __init__(self, *a, **k): pass
+        def run(self, action): return f"menu-for:{action}"
+
+    monkeypatch.setattr("desk.actions.Actions", FakeActions)
+    out = bot.poll()
+    assert out["handled"] == ["menu"]
+    assert sent[0][1].get("keyboard") is True        # the buttons come with it
+
+
+def test_bot_folds_a_backlog_into_one_reply(tmp_path, monkeypatch):
+    """A long quiet period leaves a queue. Answering all of it floods the chat,
+    so the newest is answered and the older ones are acknowledged, not ignored."""
+    from desk.bot import TelegramBot
+    updates = [{"update_id": 50 + i, "message": {"text": "تقرير",
+                                                 "chat": {"id": 933571066}}}
+               for i in range(8)]
+    bot, calls = _fake_bot(tmp_path, monkeypatch, updates=updates)
+    sent = []
+    monkeypatch.setattr(TelegramBot, "send",
+                        lambda self, text, **kw: sent.append(text) or True)
+
+    class FakeActions:
+        def __init__(self, *a, **k): pass
+        def run(self, action): return f"answer:{action}"
+
+    monkeypatch.setattr("desk.actions.Actions", FakeActions)
+    out = bot.poll(max_replies=3)
+    assert out["handled"] == ["report", "report", "report"]   # the newest 3
+    assert out["folded"] == 5
+    assert len(sent) == 3
+    assert "تجاهلت 5" in sent[0]                 # the backlog is acknowledged once
+    assert "تجاهلت" not in sent[1] and "تجاهلت" not in sent[2]
+    # Everything is confirmed, so the folded ones are not redelivered forever.
+    assert out["next_offset"] == 58
