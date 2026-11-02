@@ -774,7 +774,30 @@ falls back to deterministic sentences, and the **report says so**; it also print
   past it (never against the current price), and exclude flat bias + the deadband
   rather than counting them as wins. Record the desk's *implied* bias even on
   `no-trade`, or 13/13 silent runs leave nothing to grade.
-- **Model news labelling:** model labels vs the keyword map, disagreements
+- ⭐ **Reading a Telegram update does not confirm it.** The Bot API confirms only
+when a LATER `getUpdates` passes a higher offset; there is no "ack". A scheduled
+run makes one call, so the offset was never sent back and *every pass replayed
+the whole backlog*. Tell: two runs whose `next_offset` went **down**. Fix:
+`poll()` ends with `confirm(next_offset)`. Verified live: run 1 answered 23,
+run 2 `updates: 0`.
+⭐ **A fake that is too generous cannot catch the bug it models.** The test
+double replayed every update every call, so it could not show the cursor was
+stuck — it modelled the response, not the rule. Copy the *rule* (the watermark
+moves only on a later call) and the bug becomes a failing test in one run.
+⭐ **A stale comment can BE the bug.** Three places asserted `getUpdates`
+confirms "in the same call that reads it" — the false belief that made the
+missing confirmation look deliberate. When you fix a bug, grep the *prose* that
+justified it.
+⚠ **GitHub `schedule` has never fired on this repo** — 0 `schedule` events on
+all 3 workflows (10 dispatch, 1 push, 1 PR), including the pre-existing watch
+due ~14 times. Not a fork/archived/disabled; `state=active`. Cannot verify
+further (403 on `/actions/permissions`). The desk may not be alerting on its own.
+**Gates:** `pyproject.toml` + `marketdesk-ci.yml` run pytest/mypy/ruff on every
+push and PR. Coverage 84%; `sources/biquote.py` 36% (the only network module).
+**The repo is PUBLIC, has no licence, and tracks `biquote/*.csv`** (biquote's
+market data) — a licence question, not a code bug.
+
+**Model news labelling:** model labels vs the keyword map, disagreements
   recorded. Live 13/25 disagreed and the model was right — the map scored
   "Alphabet bond sale" as *bullish for gold*. Keep the keyword baseline as
   fallback; never let the model silently replace a computed value.
