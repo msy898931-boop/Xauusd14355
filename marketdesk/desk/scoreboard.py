@@ -174,7 +174,7 @@ class Grader:
 
     def _grade_plans(self, run_id: str, symbol: str, payload: dict,
                      started: dt.datetime, now: dt.datetime,
-                     board: "Scoreboard") -> None:
+                     board: Scoreboard) -> None:
         """Grade the trade plan itself: stop-before-target, not just direction."""
         # The run payload *is* the recommendation dict (older rows may nest it).
         rec = payload.get("recommendation") or payload
@@ -209,7 +209,7 @@ class Grader:
         board = Scoreboard()
         runs = self.shared.all_runs()
         board.runs_seen = len(runs)
-        now = dt.datetime.now(dt.timezone.utc)
+        now = dt.datetime.now(dt.UTC)
         agent_scores: dict[tuple[str, str], AgentScore] = {}
 
         for run in runs:
@@ -227,7 +227,7 @@ class Grader:
                              else ("down" if s < -NEUTRAL_BAND else "flat"))
             q = (payload.get("gather") or {}).get("quote") or {}
             entry = q.get("mid")
-            started = dt.datetime.fromtimestamp(run["started_at"], dt.timezone.utc)
+            started = dt.datetime.fromtimestamp(run["started_at"], dt.UTC)
             if direction not in ("up", "down") or not entry:
                 continue                     # flat or priceless: nothing to grade
 

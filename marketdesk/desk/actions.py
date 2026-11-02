@@ -58,7 +58,7 @@ def _payload(row: dict) -> dict:
     return out if isinstance(out, dict) else {}
 
 
-def _run_from_row(shared: SharedMemory, row: dict) -> "Run":
+def _run_from_row(shared: SharedMemory, row: dict) -> Run:
     """Rebuild a Run from what a previous pass stored, so a past card can be
     rendered again without re-running the desk."""
     studies = [Study(agent=s["agent"], kind=s["kind"], stance=s["stance"],

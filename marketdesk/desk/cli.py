@@ -147,8 +147,9 @@ def _menu_text(settings) -> str:
 def cmd_bot(args) -> int:
     """One poll pass: read the button presses since the last pass and answer.
 
-    Run from a schedule, not in a loop. Telegram confirms the updates in the
-    same call, so a fresh runner with no disk still never replays a press.
+    Run from a schedule, not in a loop. Telegram confirms the updates when the
+    offset is sent back at the end of the pass, so a fresh runner with no disk
+    still never replays a press.
     """
     import json
 

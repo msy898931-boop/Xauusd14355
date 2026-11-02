@@ -5,11 +5,11 @@ Run: PYTHONPATH=. python3 -m pytest tests -q
 
 from __future__ import annotations
 
-import io
 import json
-import pytest
 import os
 import sys
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -18,7 +18,6 @@ from desk.agents.news_agent import classify
 from desk.config import Settings
 from desk.memory import AgentMemory, SharedMemory
 from desk.orchestrator import Orchestrator
-
 
 # ---- fixtures ---------------------------------------------------------
 
@@ -253,7 +252,7 @@ def test_news_runs_before_risk_gate(tmp_path, monkeypatch):
 
     def calendar_with_imminent(importance="high", limit=100):
         import datetime as dt
-        soon = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=3)).isoformat()
+        soon = (dt.datetime.now(dt.UTC) + dt.timedelta(hours=3)).isoformat()
         return [{"time": soon, "name": "FOMC", "currency": "USD",
                  "importance": "high", "forecast": None}]
 
@@ -287,7 +286,7 @@ def _run_with_history(tmp_path, monkeypatch, *, bias_score, entry, later_price,
     # Bars spread from the run's time to now, 5 minutes apart, so a bar really
     # exists at each horizon. The entry price lives in the run's quote; every
     # bar carries the price the horizon resolves at.
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     t0 = now - dt.timedelta(seconds=run_age_s)
     n = int(run_age_s / 300) + 1
     for tf in ("5m", "15m", "1h"):
@@ -423,7 +422,9 @@ def test_watch_once_does_not_alert_when_signal_repeats(tmp_path, monkeypatch):
 
     class FakeNotifier:
         def __init__(self): self.sent = []
-        def send(self, text): self.sent.append(text); return True
+        def send(self, text):
+            self.sent.append(text)
+            return True
 
     fake = FakeNotifier()
     first = desk.watch_once(notifier=fake)
@@ -482,7 +483,6 @@ def test_parse_labels_rejects_garbage():
 
 
 def test_news_falls_back_to_keywords_without_model(tmp_path):
-    from desk.agents.news_agent import NewsAgent
     from desk.orchestrator import Orchestrator
     s = _settings(tmp_path)
     desk = Orchestrator(s)
@@ -547,6 +547,7 @@ def test_llm_breaker_skips_calls_after_rate_limit(monkeypatch):
     """A spent quota must not be retried: the second call returns at once."""
     import io
     import urllib.error
+
     from desk.llm import LLM
 
     calls = {"n": 0}
@@ -572,6 +573,7 @@ def test_llm_rotates_to_next_model_when_head_is_spent(monkeypatch):
     of the chain is that the desk keeps a live model."""
     import io
     import urllib.error
+
     from desk.llm import LLM
 
     seen = []
@@ -724,6 +726,7 @@ def test_news_labels_the_same_text_for_both_labellers(tmp_path, monkeypatch):
 def test_budget_is_a_real_ceiling(tmp_path):
     """A slow agent must be cut at the deadline, not waited out."""
     import time as _t
+
     from desk.agents.base import Agent, Study
     from desk.orchestrator import Orchestrator
 
@@ -832,7 +835,7 @@ def _mkbars(start_epoch, step_min, n, path):
     """`n` bars `step_min` apart; each bar's OHLC follows `path(i)`. The plan is
     graded on 5m out to 4h and on 15m out to 1d, so a test must seed both."""
     import datetime as _dt
-    base = _dt.datetime.fromtimestamp(start_epoch, _dt.timezone.utc)
+    base = _dt.datetime.fromtimestamp(start_epoch, _dt.UTC)
     out = []
     for i in range(n):
         p = path(i)
@@ -853,11 +856,12 @@ def test_plan_grading_stop_before_target_is_a_loss(tmp_path):
     """The whole point of grading the plan: a short that reaches its target only
     after first taking out the stop is a LOSS, not a win."""
     import datetime as _dt
-    from desk.scoreboard import Grader
+
     from desk.memory import SharedMemory
+    from desk.scoreboard import Grader
     s = _settings(tmp_path)
     shared = SharedMemory(s.shared_db)
-    now = _dt.datetime.now(_dt.timezone.utc)
+    now = _dt.datetime.now(_dt.UTC)
     started = now - _dt.timedelta(hours=6)
     ep = started.timestamp()
     # short from 100: stop 102, target 96. Price spikes to 103 FIRST (stop),
@@ -873,11 +877,12 @@ def test_plan_grading_stop_before_target_is_a_loss(tmp_path):
 
 def test_plan_grading_target_before_stop_is_a_win(tmp_path):
     import datetime as _dt
-    from desk.scoreboard import Grader
+
     from desk.memory import SharedMemory
+    from desk.scoreboard import Grader
     s = _settings(tmp_path)
     shared = SharedMemory(s.shared_db)
-    now = _dt.datetime.now(_dt.timezone.utc)
+    now = _dt.datetime.now(_dt.UTC)
     started = now - _dt.timedelta(hours=6)
     ep = started.timestamp()
     # short from 100: price falls to the target first, stop never touched.
@@ -894,11 +899,12 @@ def test_plan_grading_a_bar_spanning_both_takes_the_stop(tmp_path):
     """When one bar contains both the stop and the target, the conservative
     reading is the stop — the desk must never flatter itself."""
     import datetime as _dt
-    from desk.scoreboard import Grader
+
     from desk.memory import SharedMemory
+    from desk.scoreboard import Grader
     s = _settings(tmp_path)
     shared = SharedMemory(s.shared_db)
-    now = _dt.datetime.now(_dt.timezone.utc)
+    now = _dt.datetime.now(_dt.UTC)
     started = now - _dt.timedelta(hours=6)
     ep = started.timestamp()
     bars = _mkbars(ep, 5, 60, lambda i: 100.0)
@@ -916,6 +922,7 @@ def test_concurrent_writes_do_not_raise(tmp_path):
     """Eight agents publish at once; a locked database must be retried, not
     surfaced as an agent failure."""
     import concurrent.futures as cf
+
     from desk.memory import SharedMemory
     s = _settings(tmp_path)
     shared = SharedMemory(s.shared_db)
@@ -945,6 +952,7 @@ def test_check_alerts_reports_not_configured(tmp_path, monkeypatch):
 def test_check_alerts_reports_bad_token(tmp_path, monkeypatch):
     """A rejected token must exit non-zero and name the cause, not pass silently."""
     import urllib.error
+
     from desk import cli
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "123456789")
@@ -1089,6 +1097,7 @@ def test_notifier_escapes_html_so_a_stray_ampersand_cannot_drop_the_send():
     message for an unknown entity, so the send must escape, not the caller."""
     import json
     import urllib.request
+
     from desk.config import Settings
     from desk.notify import Notifier
 
@@ -1230,8 +1239,8 @@ def test_bot_reports_a_transport_failure_not_an_empty_pass(tmp_path, monkeypatch
     """An invalid token must not look like a quiet chat. `getUpdates` raises, and
     the pass reports `ok: false` so the run goes red instead of silently green."""
     import urllib.error
+
     from desk.bot import TelegramBot, TelegramError
-    from desk.config import Settings
 
     s = _settings(tmp_path)
     s.telegram_token = "123456:DEAD"
@@ -1256,6 +1265,7 @@ def test_bot_reports_a_transport_failure_not_an_empty_pass(tmp_path, monkeypatch
 def test_bot_cli_exits_nonzero_when_the_pass_fails(tmp_path, monkeypatch):
     """The workflow reads the exit code; a failed pass must not be green."""
     import urllib.error
+
     from desk import cli
     from desk.bot import TelegramBot
 

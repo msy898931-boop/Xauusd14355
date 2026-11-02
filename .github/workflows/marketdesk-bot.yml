@@ -9,8 +9,9 @@ name: marketdesk-bot
 #
 # The state is confirmed to Telegram, not kept locally. A runner is a fresh VM
 # with no disk, so a local "last seen" pointer would be lost and every pass
-# would replay the same press. `getUpdates` carries the cursor forward, which
-# makes the pass idempotent with nothing of ours to lose.
+# would replay the same press. Telegram confirms an update only when a LATER
+# `getUpdates` passes a higher offset, so the pass ends by sending the offset
+# back; that makes the pass idempotent with nothing of ours to lose.
 
 on:
   schedule:

@@ -131,7 +131,7 @@ class NewsAgent(Agent):
         norm = max(-1.0, min(1.0, tally / max(len(scored), 1) * 2))
 
         # Upcoming high-impact events (actual is null until published).
-        now = dt.datetime.now(dt.timezone.utc)
+        now = dt.datetime.now(dt.UTC)
         upcoming = []
         for e in cal:
             try:

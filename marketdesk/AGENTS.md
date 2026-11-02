@@ -15,7 +15,9 @@ python3 -m desk.cli memory          # inspect the shared memory
 python3 -m desk.cli agents          # list the roster
 python3 -m desk.cli bot             # answer the chat's button presses
 python3 -m desk.cli menu            # publish the button menu to the chat
-python3 -m pytest tests -q          # 67 tests, keyless and offline
+python3 -m pytest tests -q          # 74 tests, keyless and offline
+python3 -m mypy desk                # types (has caught real bugs tests missed)
+python3 -m ruff check .             # lint
 ```
 
 ## Rules that must not be broken
