@@ -301,7 +301,8 @@ class Orchestrator:
         n = notifier or Notifier(self.settings)
         from .report import render
         sent = n.send(render(run, lang="ar"))
-        ledger.record(detail, run.run_id)
+        if sent:
+            ledger.record(detail, run.run_id)
         out["alerted"] = sent
         out["reason"] = "alerted" if sent else "alert not configured/failed"
         return out

@@ -434,6 +434,39 @@ def test_watch_once_does_not_alert_when_signal_repeats(tmp_path, monkeypatch):
     assert second["alerted"] is False and second["reason"] == "already alerted"
 
 
+def test_watch_once_retries_when_send_fails(tmp_path, monkeypatch):
+    """A send that fails must NOT be recorded. Otherwise a signal that was never
+    delivered is suppressed forever — the ledger says 'already sent' and the
+    alert never happens, silently."""
+    s = _settings(tmp_path)
+    desk = Orchestrator(s)
+    bars = _wave(220, period=40, amp=30, base=3000, drift=-3.0)
+    monkeypatch.setattr("desk.sources.fetch_candles", lambda sym, tf, limit=1000: bars)
+    monkeypatch.setattr("desk.sources.fetch_quote",
+                        lambda sym: {"mid": bars[-1]["close"], "bid": 1, "ask": 1,
+                                     "market_state": "open", "stale": False,
+                                     "quote_age_s": 0, "day_diff_pct": -1.0,
+                                     "source": "test"})
+    monkeypatch.setattr("desk.sources.fetch_news", lambda symbol=None, max_results=25: [])
+    monkeypatch.setattr("desk.sources.fetch_calendar", lambda importance="high", limit=100: [])
+    monkeypatch.setattr("desk.sources.fetch_summary", lambda: {})
+    s.alert_score = 0.25
+    s.min_rr = 0.0
+
+    class FlakyNotifier:
+        def __init__(self): self.calls = 0
+        def send(self, text):
+            self.calls += 1
+            return self.calls > 1          # fail the first time, succeed after
+
+    fake = FlakyNotifier()
+    first = desk.watch_once(notifier=fake)
+    assert first["alerted"] is False
+    second = desk.watch_once(notifier=fake)
+    assert second["alerted"] is True, "the failed send must be retried"
+    assert fake.calls == 2
+
+
 # ---- news labelling ---------------------------------------------------
 
 def test_parse_labels_reads_json():

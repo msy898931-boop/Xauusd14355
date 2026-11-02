@@ -749,6 +749,17 @@ falls back to deterministic sentences, and the **report says so**; it also print
   process.** The harness injects them into that command's environment; a later
   command does not see them. Verify with
   `tr '\0' '\n' < /proc/$PID/environ | grep -c TELEGRAM_BOT_TOKEN=`.
+- ⭐ **A write probe leaves a real commit on the remote — it is not free.**
+  When GitHub App access looks blocked, `PUT contents` is the honest test (the
+  `/repos` `push: true` field lies). But that probe creates a commit; after
+  access is granted, **list the remote before any `--force`** — here it held
+  only my own probe commits, so forcing over them was safe.
+- ⭐ **"Denied to <owner>" is the signature of an App, not of the user.**
+  `remote: Permission to <o>/<r> denied to <o>` + 403 + `x-oauth-scopes` empty
+  = the OpenHands GitHub App is the actor and the repo is not in its
+  `repository_selection`. Fix is owner-side in the UI; code is unchanged. The
+  selection can be **switched** (analysisdesk → Xauusd14355) rather than
+  extended — re-probe, don't assume.
 - **News must run BEFORE the risk gate.** All 8 in one pool → the gate reads
   SQLite instantly while news waits on the network, so the gate read an empty row
   and waved through the event it exists to block. **When one agent's output is
