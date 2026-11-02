@@ -779,3 +779,98 @@ falls back to deterministic sentences, and the **report says so**; it also print
   "Alphabet bond sale" as *bullish for gold*. Keep the keyword baseline as
   fallback; never let the model silently replace a computed value.
 Detail → `2026-11-02.md`.
+
+## MarketDesk deployment (session 3) — the Telegram question
+Owner: "بدي اعمل جلسة ريندر جديدة مشان التلغرام شغلو هنيك بعتلي التفاصيل كاملة".
+Asked to move the alerting to Render; the brief was requested before any deploy.
+
+**RESOLVED at the end of the session** (owner pasted a real token in chat):
+- ✅ `getMe` → **ok**, bot **`@Xauusd14355_bot`** (first_name `Xauusd14355`).
+- ⚠ **The old `TELEGRAM_CHAT_ID` secret was ALSO wrong** — 10 digits vs the real
+  **`933571066`** (9 digits), read from `getUpdates` after the owner sent `/start`
+  (from `Almalek121` / رمضان عوينات). **Both Telegram secrets were wrong, not one.**
+- ✅ End-to-end proved with the *desk's own code*:
+  `check-alerts --send` → `getMe: ok · test send: delivered` (exit 0); a real
+  `watch` pass ran and returned `{"verdict":"short","score":-0.157,"alerted":false,
+  "reason":"conviction -0.16 below 0.25"}` — i.e. **the pipeline is live and the
+  desk correctly stayed silent** (below the 0.25 threshold). That is the designed
+  behaviour, not a failure.
+- ✅ `render.yaml` written at repo root (cron job shape). 55 tests pass, mypy clean.
+
+**Facts measured earlier in the session (each one a probe, not a guess):**
+- ⭐ **The first `TELEGRAM_BOT_TOKEN` was STRUCTURALLY invalid, not just
+  rejected.** len **35**, **no colon**, `getMe` → **404** (a malformed token path).
+  A real BotFather token is `NNNNNNNN:AA…` ≈ **46** chars, **2** segments. So the
+  value was not a token at all. **A shape check must assert the colon+segments,
+  not only length** — `Notifier.available` checks neither.
+- **The secret update DOES land across sessions.** Fingerprint `30c8f696` (len 35)
+  is *different* from the 46-char `0c9f76d8` of session 2 → the sandbox is NOT
+  frozen to a start-time snapshot (that hypothesis was wrong, or the harness
+  changed). The owner's edits do propagate; this particular value is just not a
+  valid token.
+- ⚠ **A fresh command sees the secrets; `check-alerts` does not.** Plain
+  `env | grep` shows `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` **set**, but
+  `python3 -m desk.cli check-alerts` printed "NOT CONFIGURED" (token set: False)
+  while the *same* command run right after DID see them. Injection is per-command
+  and flaky/async — **put the secret names in the same command text and re-run if
+  a probe says "unset"**. (Related: `nohup` drops injected secrets.)
+- **MarketDesk has NO HTTP server** (no http.server/FastAPI/flask anywhere). It is
+  a CLI/loop only. So a Render **Web Service** would not fit it; the honest
+  primitive is a **Render Cron Job** (`python3 -m desk.cli watch`, one pass per
+  trigger). ⚠ Render: **Cron Jobs and Background Workers are PAID — no free
+  instance type** (min ~$1/mo per cron service); Free tier = static sites + web
+  services (web sleeps after 15 min idle). Detail: render.com docs on async
+  primitives.
+- **The desk runs fine** from a fresh clone: keyless `run` **9.8 s**, verdict
+  **بيع (short)** score **-0.22**, entry 3946.99 / stop 3956.53 / **R:R 1.90**,
+  targets pivot/fib/pivot. With `GROQ_API_KEY` named in the command it took
+  **13.9 s** and wrote model prose: `↻ النموذج: openai/gpt-oss-20b (دار 3 مرة بعد
+  نفاد حصة موديل)` — i.e. **the first 3 models' daily quota is spent and the
+  chain rotated down**, which is the designed behaviour. ⚠ **The earlier
+  "النموذج غير متاح" run was NOT a Groq outage — that command text did not name
+  `GROQ_API_KEY`, so injection skipped it.** Same trap as Telegram: a missing
+  secret name in the command reads as "the service is down". `GROQ_API_KEY` and
+  `TELEGRAM_CHAT_ID` (10 digits, plausible) are both fine.
+- **The desk state lives under `marketdesk/data/`** (gitignored): `shared.db`,
+  `signal_ledger.json`, `agents/`, `serve.log`. On a host without a mounted disk
+  this is **lost on every redeploy/restart** → the alert dedupe ledger resets and
+  an old signal could re-fire. Mount a disk or accept the reset (say which).
+- **A cron pass every 15 min = ~2 880 runs/month**, each hitting biquote (~8
+  timeframe pulls) + Groq + news. Billing is per cron *service*, not per run, so
+  cost is flat — but rate limits and the "one reading per 15 min" cadence must be
+  a deliberate choice, not a default.
+
+**Recommended shape (owner-side, I cannot deploy — Render needs sign-in):**
+Cron Job → `cd marketdesk && python3 -m desk.cli watch`, schedule `*/15 * * * *`,
+env `TELEGRAM_BOT_TOKEN` (sync:false), `TELEGRAM_CHAT_ID`, `GROQ_API_KEY`
+(sync:false), `DESK_HOME=/var/data` + a mounted disk for the ledger. Health of the
+pipeline = `check-alerts --send`, not "the job is green".
+**Blocker order: (1) a real token, (2) confirm the chat id, (3) the deploy.**
+
+### Deploying the desk: GitHub Actions beats Render
+**Render needs the owner's sign-in; I must not authenticate as them.** The
+owner asked "can't you just work on Render?" — answer: no, and here is the
+better route. Render Cron Jobs are also paid (~$1/mo min). **GitHub Actions is
+free on a public repo, needs no card and no second account**, so it is the
+default answer for "run this on a schedule" in this project.
+**The App's scope forces a clean split — probe it, don't assume:**
+`/actions/workflows` → 200 ⇒ *I can write workflow files*;
+`/actions/secrets*` and `/actions/variables` → **403 "Resource not accessible by
+integration"** ⇒ *I can never set secrets*. So **the agent authors the
+automation and the owner adds the secrets by hand.** Repo `permissions` claims
+`admin: true` while secrets are 403 — same "advisory vs actual" trap as the push
+probe; only a real call tells the truth.
+**⭐ A workflow log cannot distinguish an unset secret from a set one** — both
+print `NAME:` with an empty value. A silent green run is not a verified run.
+Add a presence-only step (`[ -z "${!v}" ]` → MISSING, else `set (length N)`)
+from the start; it is what turned three unreadable runs into a diagnosis. Then
+prove the alert path on demand with `desk.cli check-alerts --send`, which does
+the `getMe` probe and delivers a real message — `test send: delivered` is the
+only honest end-to-end proof. **Live result: token set, `getMe: ok · bot
+@Xauusd14355_bot`, `test send: delivered`.**
+**Watch out:** secrets get pasted into **Variables** (the tab beside Secrets)
+or into the wrong repo — the owner has 12. Ask for repo name + which tab, or a
+screenshot with values masked; never ask for the value. Also: a PR must be
+**marked ready** before `merge-async`, and a commit message containing
+backticks must go through `-F file`, or the shell runs them.
+Detail → `2026-11-02.md`.
