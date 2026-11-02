@@ -964,21 +964,36 @@ def test_check_alerts_reports_bad_token(tmp_path, monkeypatch):
 # ours, and replaying a press we already answered.
 
 def _fake_bot(tmp_path, monkeypatch, *, updates, allow_chat="933571066"):
-    """A TelegramBot whose API is a recorder. Returns (bot, calls)."""
+    """A TelegramBot whose API is a recorder. Returns (bot, calls).
+
+    The fake models confirmation the way the Bot API does: an update is returned
+    only while the server's confirmed offset is at or below it, and a call's
+    `offset` raises that watermark. A fake that simply replayed `updates` on
+    every call cannot catch the bug this models -- that reading an update does
+    not confirm it.
+    """
     from desk.bot import TelegramBot
     s = _settings(tmp_path)
     s.telegram_token = "123456:FAKE"
     s.telegram_chat_id = allow_chat
     calls: list[tuple[str, dict]] = []
+    state = {"confirmed": 0}   # the watermark Telegram keeps
 
     def fake_call(self, method, payload, timeout=20):
         calls.append((method, payload))
         if method == "getUpdates":
-            return {"ok": True, "result": updates}
+            off = payload.get("offset")
+            if off is not None:
+                state["confirmed"] = max(state["confirmed"], off)
+            return {"ok": True,
+                    "result": [u for u in updates
+                               if u.get("update_id", 0) >= state["confirmed"]]}
         return {"ok": True, "result": {}}
 
     monkeypatch.setattr(TelegramBot, "_call", fake_call)
-    return TelegramBot(s), calls
+    bot = TelegramBot(s)
+    bot.fake_confirmed = state          # exposed so a test can read the watermark
+    return bot, calls
 
 
 def _press(update_id, data, chat="933571066"):
@@ -1333,3 +1348,38 @@ def test_bot_folds_a_backlog_into_one_reply(tmp_path, monkeypatch):
     assert "تجاهلت" not in sent[1] and "تجاهلت" not in sent[2]
     # Everything is confirmed, so the folded ones are not redelivered forever.
     assert out["next_offset"] == 58
+
+
+def test_bot_confirms_so_a_backlog_is_not_answered_twice(tmp_path, monkeypatch):
+    """The bug that only a faithful fake catches.
+
+    The Bot API confirms an update when a LATER call passes a higher offset --
+    reading it is not enough, and there is no separate "ack". A scheduled run
+    makes one getUpdates call, so without a second confirming call nothing is
+    ever confirmed and every pass re-answers the whole backlog. Observed live:
+    two runs, the second reporting a *lower* offset than the first.
+    """
+    from desk.bot import TelegramBot
+    updates = [{"update_id": 100 + i,
+                "message": {"text": "تقرير", "chat": {"id": 933571066}}}
+               for i in range(6)]
+    bot, calls = _fake_bot(tmp_path, monkeypatch, updates=updates)
+    sent = []
+    monkeypatch.setattr(TelegramBot, "send",
+                        lambda self, text, **kw: sent.append(text) or True)
+
+    class FakeActions:
+        def __init__(self, *a, **k): pass
+        def run(self, action): return f"answer:{action}"
+
+    monkeypatch.setattr("desk.actions.Actions", FakeActions)
+
+    first = bot.poll(max_replies=5)
+    assert len(sent) == 5                       # the newest five
+    assert first["confirmed"] is True
+    # The watermark must have moved past the batch, or the next pass repeats it.
+    assert bot.fake_confirmed["confirmed"] == 106
+
+    second = bot.poll(max_replies=5)
+    assert second["updates"] == 0               # nothing left to answer
+    assert len(sent) == 5                       # and no duplicate replies

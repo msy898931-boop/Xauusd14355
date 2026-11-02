@@ -145,6 +145,22 @@ class TelegramBot:
             raise TelegramError(f"getUpdates rejected: {body.get('description')}")
         return body.get("result") or []
 
+    def confirm(self, offset: int) -> bool:
+        """Tell Telegram that everything below `offset` is delivered.
+
+        The Bot API confirms an update only when a LATER call passes a higher
+        offset -- reading it is not enough, and there is no separate "ack". A
+        scheduled run makes exactly one `getUpdates` call, so without this
+        second call *nothing is ever confirmed* and every pass re-answers the
+        whole backlog forever. One extra call, no state: with the queue drained
+        it just returns an empty list.
+        """
+        try:
+            self.get_updates(offset)
+            return True
+        except TelegramError:
+            return False
+
     def answer_callback(self, callback_id: str, text: str = "") -> None:
         """Stops the client's spinner. A failure here is cosmetic, never fatal."""
         try:
@@ -250,5 +266,14 @@ class TelegramBot:
             # discoverable without hunting for a /command.
             self.send(text, chat_id=chat, keyboard=(action == "menu"))
             handled.append(action)
+        # Confirm everything read, so the next pass starts after this batch.
+        # A single scheduled run makes only one getUpdates call, and the Bot API
+        # confirms an update only when a LATER call passes a higher offset --
+        # reading it is not enough. Without this the backlog is re-answered on
+        # every pass, forever.
+        confirmed = False
+        if updates and next_offset is not None:
+            confirmed = self.confirm(next_offset)
         return {"ok": True, "updates": len(updates), "handled": handled,
-                "folded": len(folded), "next_offset": next_offset}
+                "folded": len(folded), "confirmed": confirmed,
+                "next_offset": next_offset}

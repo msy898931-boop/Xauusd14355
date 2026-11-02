@@ -118,6 +118,19 @@ python3 -m pytest tests -q          # 67 tests, keyless and offline
     answered, the older ones are confirmed and acknowledged in the first reply
     with a count. Both extremes are wrong: silence loses the request, and a
     burst of 18 replies is unreadable.
+27. **Reading an update does not confirm it.** The Bot API confirms an update
+    only when a LATER `getUpdates` passes a higher offset -- there is no separate
+    "ack". A scheduled run makes exactly one call, so without a second
+    confirming call *nothing is ever confirmed* and every pass re-answers the
+    whole backlog forever. Caught live: two consecutive runs reported offsets
+    932661285 then 932661283, going *down*. `poll()` now ends with
+    `confirm(next_offset)`.
+28. **A fake that is too generous cannot catch the bug it models.** The first
+    test double returned every update on every call, so it could never show that
+    the cursor was not advancing. A fake has to reproduce the *rule* -- here,
+    that the watermark only moves on a later call. Making the fake faithful
+    turned the bug into a failing test in one run.
+
 
 
 ## Adding an agent
