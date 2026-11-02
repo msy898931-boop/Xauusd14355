@@ -928,3 +928,30 @@ def test_concurrent_writes_do_not_raise(tmp_path):
     with cf.ThreadPoolExecutor(max_workers=8) as pool:
         assert all(pool.map(write, range(40)))
     assert len(shared.load_studies("run1")) == 1
+
+
+# ---- alert pipeline self-check ----------------------------------------
+
+def test_check_alerts_reports_not_configured(tmp_path, monkeypatch):
+    """The desk is silent by design, so 'not configured' must be distinguishable
+    from 'no signal yet'. The check must say which, without a network call."""
+    from desk.cli import main
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "")
+    monkeypatch.setenv("DESK_HOME", str(tmp_path))
+    assert main(["check-alerts"]) == 2
+
+
+def test_check_alerts_reports_bad_token(tmp_path, monkeypatch):
+    """A rejected token must exit non-zero and name the cause, not pass silently."""
+    import urllib.error
+    from desk import cli
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "123456789")
+    monkeypatch.setenv("DESK_HOME", str(tmp_path))
+
+    def boom(url, timeout=None):
+        raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    assert cli.main(["check-alerts"]) == 1

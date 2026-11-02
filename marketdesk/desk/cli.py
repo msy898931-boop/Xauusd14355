@@ -95,6 +95,50 @@ def cmd_serve(args) -> int:
         time.sleep(interval)
 
 
+def cmd_check_alerts(args) -> int:
+    """Verify the alert pipeline in one call.
+
+    The desk is silent by design, so an unconfigured or dead notifier looks
+    exactly like 'no signal yet'. This separates the three cases: not
+    configured, token rejected, and chat unreachable. Secrets are never printed.
+    """
+    import urllib.error
+    import urllib.request
+
+    from .notify import Notifier
+
+    s = _settings(args)
+    n = Notifier(s)
+    print(f"token set:   {bool(s.telegram_token)}")
+    print(f"chat_id set: {bool(s.telegram_chat_id)}")
+    if not s.telegram_token:
+        print("result: NOT CONFIGURED — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+        return 2
+    try:
+        with urllib.request.urlopen(
+                f"https://api.telegram.org/bot{s.telegram_token}/getMe", timeout=15) as r:
+            d = json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        print(f"getMe: FAILED {e.code} — the token is not valid")
+        return 1
+    except (urllib.error.URLError, TimeoutError, ValueError) as e:
+        print(f"getMe: FAILED ({type(e).__name__}) — cannot reach Telegram")
+        return 1
+    if not d.get("ok"):
+        print("getMe: FAILED — token rejected")
+        return 1
+    print(f"getMe: ok · bot @{(d.get('result') or {}).get('username')}")
+    if not s.telegram_chat_id:
+        print("result: token is valid, but chat_id is missing")
+        return 2
+    if args.send:
+        ok = n.send("MarketDesk — اختبار التنبيه: الأنبوب يعمل.")
+        print(f"test send: {'delivered' if ok else 'FAILED — the bot cannot reach this chat'}")
+        return 0 if ok else 1
+    print("result: ready (add --send to deliver a test message)")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="desk", description="MarketDesk multi-agent analysis")
     p.add_argument("--symbol", default=None, help="instrument (default XAUUSD)")
@@ -129,6 +173,12 @@ def main(argv=None) -> int:
     sv.add_argument("--symbol", default=None)
     sv.add_argument("--interval", type=int, default=15, help="minutes between passes")
     sv.set_defaults(func=cmd_serve)
+
+    ca = sub.add_parser("check-alerts", help="verify the alert pipeline end to end")
+    ca.add_argument("--symbol", default=None)
+    ca.add_argument("--send", action="store_true",
+                    help="also deliver a test message to the chat")
+    ca.set_defaults(func=cmd_check_alerts)
 
     args = p.parse_args(argv)
     return args.func(args)
