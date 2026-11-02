@@ -81,6 +81,12 @@ same press. `getUpdates` carries the cursor forward in the same call, which make
 each pass idempotent with no state of ours to lose. A press the pass did not
 reach is left unconfirmed, so Telegram redelivers it instead of dropping it.
 
+You can also just type: `/start` or `تحليل` or `توصية` — an unknown message
+shows the menu rather than being ignored. If the bot was quiet for a while the
+queue can hold many requests; the newest few are answered and the older ones are
+folded into the first reply, which says how many, so the chat stays readable and
+nothing is silently swallowed.
+
 Only the configured chat may press a button; anything else is refused.
 
 ## The scoreboard — the desk's record

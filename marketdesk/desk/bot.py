@@ -53,6 +53,24 @@ MENU: list[list[tuple[str, str]]] = [
     [("⏱️ حالة السوق", "market"), ("📈 معدل النجاح", "hitrate")],
 ]
 
+# Plain text a person types, mapped to the same actions the buttons use. A
+# message that matches nothing shows the menu rather than being ignored: an
+# owner who types "تحليل" and hears nothing back is worse than one who is shown
+# the buttons.
+TEXT_ACTIONS: dict[str, str] = {
+    "/start": "menu", "/menu": "menu", "/help": "menu",
+    "/analysis": "analysis", "/recommend": "recommend", "/report": "report",
+    "/market": "market", "/hitrate": "hitrate",
+    "تحليل": "analysis", "توصية": "recommend", "تقرير": "report",
+    "سوق": "market", "نجاح": "hitrate", "قائمة": "menu", "مساعدة": "menu",
+}
+
+
+def action_for_text(text: str | None) -> str:
+    """The action a typed message means, or `menu` when it matches nothing."""
+    first = (text or "").strip().split()[0] if (text or "").strip() else ""
+    return TEXT_ACTIONS.get(first.lower()) or TEXT_ACTIONS.get(first) or "menu"
+
 
 def _keyboard() -> dict:
     return {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row]
@@ -146,11 +164,19 @@ class TelegramBot:
 
     # ---- the one pass --------------------------------------------------
     def poll(self, orchestrator=None, *, offset: int | None = None,
-             budget_s: float = 120.0) -> dict:
-        """Read the pending presses and answer each. Returns a small summary.
+             budget_s: float = 120.0, max_replies: int = 5) -> dict:
+        """Read the pending presses and messages and answer each. Returns a small
+        summary.
 
         `orchestrator` is injected so tests can supply a fake; when omitted the
         real one is built, which is what the scheduled workflow does.
+
+        `max_replies` bounds a backlog. If the bot was quiet for a while the
+        queue can hold many requests; answering every one would flood the chat,
+        so the newest is answered and the older ones are folded into it, with the
+        reply saying how many. That trades "every request gets its own reply" for
+        "the chat stays readable" -- deliberately, and only when there is a
+        backlog to fold.
         """
         from .actions import Actions
 
@@ -167,7 +193,13 @@ class TelegramBot:
         acts = Actions(self.settings, orchestrator=orchestrator)
         handled: list[str] = []
         next_offset = offset
-        for u in updates:
+
+        actionable = [i for i, u in enumerate(updates)
+                      if u.get("callback_query") or u.get("message")]
+        folded = set(actionable[:max(0, len(actionable) - max_replies)])
+        notice = len(folded)
+
+        for i, u in enumerate(updates):
             uid = u.get("update_id")
             if time.time() - started > budget_s:
                 # Leave this press and every one after it unconfirmed, so
@@ -179,21 +211,44 @@ class TelegramBot:
                 break
             if uid is not None:
                 next_offset = uid + 1
+            if i in folded:
+                continue                      # confirmed, folded into the newest
+
             cq = u.get("callback_query")
-            if not cq:
-                continue
-            chat = str(((cq.get("message") or {}).get("chat") or {}).get("id") or "")
+            msg = u.get("message")
+            if cq is not None:
+                action = cq.get("data") or ""
+                chat = str(((cq.get("message") or {}).get("chat") or {}).get("id") or "")
+                callback_id = cq.get("id", "")
+            elif msg is not None:
+                # A typed message is a request too. Answering only button
+                # presses meant a chat of 18 plain messages got total silence.
+                action = action_for_text(msg.get("text"))
+                chat = str((msg.get("chat") or {}).get("id") or "")
+                callback_id = ""
+            else:
+                continue                      # nothing actionable in this update
+
             # Only the configured chat may spend a model quota.
             if self.chat_id and chat != self.chat_id:
-                self.answer_callback(cq.get("id", ""), "غير مسموح")
+                if callback_id:
+                    self.answer_callback(callback_id, "غير مسموح")
                 continue
-            action = cq.get("data") or ""
-            self.answer_callback(cq.get("id", ""), "جارٍ التنفيذ…")
+            if callback_id:
+                self.answer_callback(callback_id, "جارٍ التنفيذ…")
             try:
                 text = acts.run(action)
             except Exception as exc:  # noqa: BLE001 - a bad action must not kill the pass
                 text = escape(f"⚠️ تعذّر تنفيذ الطلب ({exc.__class__.__name__}).")
-            self.send(text, chat_id=chat)
+            if notice:
+                # Said once, on the first reply of the pass, so a backlog is
+                # acknowledged rather than silently swallowed.
+                text = (f"<i>(تجاهلت {notice} رسالة أقدم — هذا ردّ على الأحدث)</i>"
+                        f"\n\n{text}")
+                notice = 0
+            # The menu action gets the buttons attached, so they are
+            # discoverable without hunting for a /command.
+            self.send(text, chat_id=chat, keyboard=(action == "menu"))
             handled.append(action)
         return {"ok": True, "updates": len(updates), "handled": handled,
-                "next_offset": next_offset}
+                "folded": len(folded), "next_offset": next_offset}
