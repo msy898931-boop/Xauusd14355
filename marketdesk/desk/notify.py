@@ -10,11 +10,22 @@ chat id are used to build a URL and nothing else — no printing, no echoing.
 
 from __future__ import annotations
 
+import html
 import json
 import urllib.error
 import urllib.request
 
 from .config import Settings
+
+
+def escape(text: str) -> str:
+    """Escape for Telegram's HTML parse mode.
+
+    A model-written summary can contain `&` or `<` (e.g. "R&D", "a<b"), and
+    Telegram rejects the whole message with 400 for an unknown entity. Escaping
+    at the one place that sends means every caller can pass text as it is.
+    """
+    return html.escape(text, quote=False)
 
 
 class Notifier:
@@ -34,7 +45,7 @@ class Notifier:
         if not self.available:
             return False
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-        body = json.dumps({"chat_id": self.chat_id, "text": text,
+        body = json.dumps({"chat_id": self.chat_id, "text": escape(text),
                            "parse_mode": "HTML",
                            "disable_web_page_preview": True}).encode()
         req = urllib.request.Request(url, data=body,

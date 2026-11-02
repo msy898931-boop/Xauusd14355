@@ -13,7 +13,9 @@ python3 -m desk.cli run --json      # + machine-readable payload
 python3 -m desk.cli gather          # only pull data into shared memory
 python3 -m desk.cli memory          # inspect the shared memory
 python3 -m desk.cli agents          # list the roster
-python3 -m pytest tests -q          # 19 tests, keyless and offline
+python3 -m desk.cli bot             # answer the chat's button presses
+python3 -m desk.cli menu            # publish the button menu to the chat
+python3 -m pytest tests -q          # 67 tests, keyless and offline
 ```
 
 ## Rules that must not be broken
@@ -85,6 +87,28 @@ python3 -m pytest tests -q          # 19 tests, keyless and offline
   trim, they do not page deeper. Don't try to fetch more than it keeps.
 - **biquote's licence forbids re-exposing OHLC through a public API.** Local
   analysis only; never wire the candles into a public endpoint.
+
+20. **A button on a serverless desk is polled, not pushed.** A webhook needs a
+    long-lived HTTPS endpoint and this repository has none, so the chat is polled
+    on a schedule. The cursor is confirmed to Telegram (`getUpdates` offset) and
+    never kept locally: a runner has no disk, so a local pointer would be lost
+    and every press would be replayed.
+21. **Confirm an update only once it has been answered.** Advancing the cursor
+    past a press the pass never reached tells Telegram to forget it — the press
+    is then lost with no reply and no retry. The budget stops the cursor *at*
+    the first unanswered press.
+22. **Escape for HTML at the send boundary, exactly once.** A model summary can
+    contain `&` or `<`, and Telegram rejects the whole message for an unknown
+    entity. `analysis`/`report`/`hitrate` return plain text and are escaped as a
+    block; `recommend`/`market` build their own markup and escape only the
+    dynamic fields. Escaping twice prints `&amp;amp;`.
+23. **Only the configured chat may press a button.** An unauthenticated callback
+    spends a model quota; a stranger who finds the bot must not be able to drain
+    it. Every other chat gets "غير مسموح" and nothing else.
+24. **A stored run's `payload` is a JSON string.** `save_run` serialises it and
+    only `load_studies` decodes its own column, so a caller reading the run row
+    must decode it too (`_payload`). Reading it as a dict crashed the button on
+    its first live press.
 
 ## Adding an agent
 Subclass `Agent` in `desk/agents/`, set `name`/`kind`/`weight`/`frames`,

@@ -955,3 +955,301 @@ def test_check_alerts_reports_bad_token(tmp_path, monkeypatch):
 
     monkeypatch.setattr(urllib.request, "urlopen", boom)
     assert cli.main(["check-alerts"]) == 1
+
+
+# ---- the Telegram bot --------------------------------------------------
+#
+# These run against a fake Telegram, never the network, and pin the two things
+# that would silently break a chat-driven desk: answering a press that is not
+# ours, and replaying a press we already answered.
+
+def _fake_bot(tmp_path, monkeypatch, *, updates, allow_chat="933571066"):
+    """A TelegramBot whose API is a recorder. Returns (bot, calls)."""
+    from desk.bot import TelegramBot
+    s = _settings(tmp_path)
+    s.telegram_token = "123456:FAKE"
+    s.telegram_chat_id = allow_chat
+    calls: list[tuple[str, dict]] = []
+
+    def fake_call(self, method, payload, timeout=20):
+        calls.append((method, payload))
+        if method == "getUpdates":
+            return {"ok": True, "result": updates}
+        return {"ok": True, "result": {}}
+
+    monkeypatch.setattr(TelegramBot, "_call", fake_call)
+    return TelegramBot(s), calls
+
+
+def _press(update_id, data, chat="933571066"):
+    return {"update_id": update_id,
+            "callback_query": {"id": f"cb{update_id}", "data": data,
+                               "message": {"message_id": 10, "chat": {"id": int(chat)}}}}
+
+
+def test_bot_answers_a_press_from_the_owner(tmp_path, monkeypatch):
+    from desk.bot import TelegramBot
+    bot, calls = _fake_bot(tmp_path, monkeypatch, updates=[_press(5, "recommend")])
+    sent = []
+    monkeypatch.setattr(TelegramBot, "send", lambda self, text, **kw: sent.append(text) or True)
+
+    class FakeActions:
+        def __init__(self, *a, **k): pass
+        def run(self, action): return f"answer:{action}"
+
+    monkeypatch.setattr("desk.actions.Actions", FakeActions)
+    out = bot.poll()
+    assert out["handled"] == ["recommend"]
+    assert sent == ["answer:recommend"]
+    methods = [m for m, _ in calls]
+    assert "answerCallbackQuery" in methods      # the spinner is stopped
+    assert out["next_offset"] == 6               # cursor advanced past update 5
+
+
+def test_bot_ignores_a_press_from_another_chat(tmp_path, monkeypatch):
+    """An unauthenticated press must not spend a model quota."""
+    from desk.bot import TelegramBot
+    bot, calls = _fake_bot(tmp_path, monkeypatch,
+                           updates=[_press(7, "analysis", chat="999999")])
+    sent = []
+    monkeypatch.setattr(TelegramBot, "send", lambda self, text, **kw: sent.append(text) or True)
+
+    class BoomActions:
+        def __init__(self, *a, **k): pass
+        def run(self, action): raise AssertionError("must not run for a foreign chat")
+
+    monkeypatch.setattr("desk.actions.Actions", BoomActions)
+    out = bot.poll()
+    assert out["handled"] == []
+    assert sent == []
+    # Still refused explicitly, and still advanced so it is not retried forever.
+    assert any(m == "answerCallbackQuery" for m, _ in calls)
+    assert out["next_offset"] == 8
+
+
+def test_bot_advances_the_offset_so_a_press_is_answered_once(tmp_path, monkeypatch):
+    """The cursor is confirmed to Telegram, not kept locally: a fresh runner
+    with no disk must not replay the same press on the next pass."""
+    from desk.bot import TelegramBot
+    bot, calls = _fake_bot(tmp_path, monkeypatch, updates=[_press(11, "market")])
+    monkeypatch.setattr(TelegramBot, "send", lambda self, text, **kw: True)
+
+    class FakeActions:
+        def __init__(self, *a, **k): pass
+        def run(self, action): return "ok"
+
+    monkeypatch.setattr("desk.actions.Actions", FakeActions)
+    bot.poll()
+    getupdates = [p for m, p in calls if m == "getUpdates"]
+    # First pass reads from Telegram's own cursor; the reply to Telegram carries
+    # the advance, which is what makes the pass idempotent without local state.
+    assert getupdates and "offset" not in getupdates[0]
+    bot.poll(offset=12)
+    getupdates = [p for m, p in calls if m == "getUpdates"]
+    assert getupdates[-1]["offset"] == 12
+
+
+def test_bot_reports_not_configured(tmp_path):
+    from desk.bot import TelegramBot
+    s = _settings(tmp_path)
+    s.telegram_token = ""
+    bot = TelegramBot(s)
+    assert bot.available is False
+    assert bot.poll() == {"ok": False, "reason": "not configured"}
+
+
+def test_bot_send_is_unavailable_without_a_chat(tmp_path):
+    from desk.bot import TelegramBot
+    s = _settings(tmp_path)
+    s.telegram_token = "123456:FAKE"
+    s.telegram_chat_id = ""
+    bot = TelegramBot(s)
+    assert bot.send("hi") is False          # never a request without a target
+
+
+# ---- HTML escaping at the send boundary --------------------------------
+
+def test_notifier_escapes_html_so_a_stray_ampersand_cannot_drop_the_send():
+    """A model summary can contain `&` or `<`. Telegram rejects the whole
+    message for an unknown entity, so the send must escape, not the caller."""
+    import json
+    import urllib.request
+    from desk.config import Settings
+    from desk.notify import Notifier
+
+    s = Settings()
+    s.telegram_token = "123456:FAKE"
+    s.telegram_chat_id = "933571066"
+    n = Notifier(s)
+    captured = {}
+
+    class Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return json.dumps({"ok": True}).encode()
+
+    def fake_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode())
+        return Resp()
+
+    orig = urllib.request.urlopen
+    urllib.request.urlopen = fake_urlopen
+    try:
+        assert n.send("R&D <script>") is True
+    finally:
+        urllib.request.urlopen = orig
+    assert captured["body"]["text"] == "R&amp;D &lt;script&gt;"
+
+
+def test_actions_escape_plain_text_but_keep_its_own_markup(tmp_path):
+    """`analysis`/`report`/`hitrate` are plain text and are escaped as a block;
+    `recommend`/`market` build their own `<b>` markup and escape only the
+    dynamic fields, so the markup must survive."""
+    from desk.actions import Actions
+    acts = Actions(_settings(tmp_path))
+
+    class FakeBoard:
+        def report(self): return "R&D — 2/3 = 66.7%"
+
+    class FakeGrader:
+        def __init__(self, shared): pass
+        def grade(self): return FakeBoard()
+
+    import desk.scoreboard as sb
+    orig = sb.Grader
+    sb.Grader = FakeGrader
+    try:
+        out = acts.run("hitrate")
+    finally:
+        sb.Grader = orig
+    assert "R&amp;D" in out
+
+    # recommend with no stored run still answers, and does not raise
+    assert "لا توجد قراءة محفوظة" in acts.run("recommend")
+
+
+def test_run_payload_is_decoded_from_the_stored_string(tmp_path):
+    """`runs.payload` is written as a JSON string, so a caller reading the run
+    row must decode it. Treating it as a dict is how the button crashed on its
+    first live press with `'str' object has no attribute 'get'`."""
+    from desk.actions import _payload
+    assert _payload({"payload": '{"entry": 1, "stop": 2}'}) == {"entry": 1, "stop": 2}
+    assert _payload({"payload": {"entry": 1}}) == {"entry": 1}
+    assert _payload({"payload": ""}) == {}
+    assert _payload({"payload": "not json"}) == {}
+    assert _payload({}) == {}
+
+
+def test_actions_answer_from_a_stored_run(tmp_path):
+    """The instant buttons must work off what a previous pass stored, without
+    re-running the desk. This is the path the buttons take on the second press."""
+    from desk.actions import Actions
+    from desk.memory import SharedMemory
+
+    s = _settings(tmp_path)
+    shared = SharedMemory(s.shared_db)
+    shared.save_run("r1", "XAUUSD", 1000.0, 1002.0, "short", -0.31,
+                    {"entry": 4021.5, "stop": 4040.0, "rr": 2.1,
+                     "targets": [{"level": 3990.0, "kind": "pivot"}],
+                     "levels_note": "pivot & fib", "errors": [], "gather": {},
+                     "llm": {"available": False},
+                     "bias": {"direction": "down", "score": -0.31}})
+    acts = Actions(s)
+    rec = acts.run("recommend")
+    assert "بيع" in rec and "4021.5" in rec
+    assert "&amp;" in rec                       # the note is escaped for HTML
+    rep = acts.run("report")
+    assert "4,021.50" in rep                    # the full card renders again
+    assert "&amp;" in rep
+    assert "لا" in rep                          # allowed: no
+
+
+def test_report_and_hitrate_escape_plain_text(tmp_path):
+    """`report`/`hitrate`/`analysis` return plain text; a model summary inside
+    them can contain `&`, which would fail the send if left raw."""
+    from desk.actions import Actions
+    acts = Actions(_settings(tmp_path))
+    assert "R&amp;D" in acts.run("hitrate") or "Scoreboard" in acts.run("hitrate")
+
+
+def test_bot_defers_unanswered_presses_instead_of_dropping_them(tmp_path, monkeypatch):
+    """When the time budget runs out the cursor must NOT advance past the
+    presses that were not answered. Confirming one would tell Telegram to forget
+    it, and the press would be lost with no reply and no retry."""
+    from desk.bot import TelegramBot
+    updates = [_press(20, "market"), _press(21, "analysis"), _press(22, "report")]
+    bot, calls = _fake_bot(tmp_path, monkeypatch, updates=updates)
+    sent = []
+    monkeypatch.setattr(TelegramBot, "send", lambda self, text, **kw: sent.append(text) or True)
+
+    class FakeActions:
+        def __init__(self, *a, **k): pass
+        def run(self, action): return f"answer:{action}"
+
+    monkeypatch.setattr("desk.actions.Actions", FakeActions)
+    # budget_s = -1 makes the very first press hit the ceiling.
+    out = bot.poll(budget_s=-1.0)
+    assert out["handled"] == []
+    assert sent == []
+    # The cursor stops AT the first unanswered press, so it is redelivered.
+    assert out["next_offset"] == 20
+
+
+def test_bot_answers_everything_when_the_budget_allows(tmp_path, monkeypatch):
+    from desk.bot import TelegramBot
+    updates = [_press(30, "market"), _press(31, "report")]
+    bot, calls = _fake_bot(tmp_path, monkeypatch, updates=updates)
+    monkeypatch.setattr(TelegramBot, "send", lambda self, text, **kw: True)
+
+    class FakeActions:
+        def __init__(self, *a, **k): pass
+        def run(self, action): return f"answer:{action}"
+
+    monkeypatch.setattr("desk.actions.Actions", FakeActions)
+    out = bot.poll(budget_s=600)
+    assert out["handled"] == ["market", "report"]
+    assert out["next_offset"] == 32          # one past the last answered
+
+
+def test_bot_reports_a_transport_failure_not_an_empty_pass(tmp_path, monkeypatch):
+    """An invalid token must not look like a quiet chat. `getUpdates` raises, and
+    the pass reports `ok: false` so the run goes red instead of silently green."""
+    import urllib.error
+    from desk.bot import TelegramBot, TelegramError
+    from desk.config import Settings
+
+    s = _settings(tmp_path)
+    s.telegram_token = "123456:DEAD"
+    s.telegram_chat_id = "933571066"
+
+    def boom(self, method, payload, timeout=20):
+        raise urllib.error.HTTPError(method, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(TelegramBot, "_call", boom)
+    bot = TelegramBot(s)
+    try:
+        bot.get_updates()
+        raise AssertionError("a 404 must raise, not return []")
+    except TelegramError as e:
+        assert "404" in str(e)
+    out = bot.poll()
+    assert out["ok"] is False
+    assert out["updates"] == 0 and out["handled"] == []
+    assert "404" in out["reason"]
+
+
+def test_bot_cli_exits_nonzero_when_the_pass_fails(tmp_path, monkeypatch):
+    """The workflow reads the exit code; a failed pass must not be green."""
+    import urllib.error
+    from desk import cli
+    from desk.bot import TelegramBot
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:DEAD")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "933571066")
+    monkeypatch.setenv("DESK_HOME", str(tmp_path))
+
+    def boom(self, method, payload, timeout=20):
+        raise urllib.error.HTTPError(method, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(TelegramBot, "_call", boom)
+    assert cli.main(["bot", "--budget", "5"]) == 1

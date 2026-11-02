@@ -139,6 +139,49 @@ def cmd_check_alerts(args) -> int:
     return 0
 
 
+def _menu_text(settings) -> str:
+    from .actions import Actions
+    return Actions(settings).menu_text()
+
+
+def cmd_bot(args) -> int:
+    """One poll pass: read the button presses since the last pass and answer.
+
+    Run from a schedule, not in a loop. Telegram confirms the updates in the
+    same call, so a fresh runner with no disk still never replays a press.
+    """
+    import json
+
+    from .bot import TelegramBot
+
+    s = _settings(args)
+    bot = TelegramBot(s)
+    if not bot.available:
+        print(json.dumps({"ok": False, "reason": "TELEGRAM_BOT_TOKEN not set"}))
+        return 2
+    if args.greet:
+        # Publish the menu once, so the buttons exist in the chat.
+        bot.send(_menu_text(s), keyboard=True)
+    out = bot.poll(offset=args.offset, budget_s=args.budget)
+    print(json.dumps(out, ensure_ascii=False))
+    # A failed pass must be a red run, not a green one that answered nothing.
+    return 0 if out.get("ok") else 1
+
+
+def cmd_menu(args) -> int:
+    """Publish the menu to the chat (once), so the buttons exist."""
+    from .bot import TelegramBot
+
+    s = _settings(args)
+    bot = TelegramBot(s)
+    if not bot.available:
+        print("result: NOT CONFIGURED — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+        return 2
+    ok = bot.send(_menu_text(s), keyboard=True)
+    print(f"menu published: {ok}")
+    return 0 if ok else 1
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="desk", description="MarketDesk multi-agent analysis")
     p.add_argument("--symbol", default=None, help="instrument (default XAUUSD)")
@@ -179,6 +222,20 @@ def main(argv=None) -> int:
     ca.add_argument("--send", action="store_true",
                     help="also deliver a test message to the chat")
     ca.set_defaults(func=cmd_check_alerts)
+
+    b = sub.add_parser("bot", help="one poll pass: answer button presses")
+    b.add_argument("--symbol", default=None)
+    b.add_argument("--offset", type=int, default=None,
+                   help="update_id to start from (default: Telegram's cursor)")
+    b.add_argument("--budget", type=float, default=120.0,
+                   help="seconds to spend answering before deferring the rest")
+    b.add_argument("--greet", action="store_true",
+                   help="also publish the menu before polling")
+    b.set_defaults(func=cmd_bot)
+
+    mn = sub.add_parser("menu", help="publish the button menu to the chat")
+    mn.add_argument("--symbol", default=None)
+    mn.set_defaults(func=cmd_menu)
 
     args = p.parse_args(argv)
     return args.func(args)

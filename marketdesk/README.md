@@ -45,9 +45,43 @@ an overrunning one is reported as timed-out, never as neutral.
 | `python3 -m desk.cli run [--lang ar] [--json]` | one full analysis |
 | `python3 -m desk.cli hit-rate` | grade past calls against what price did |
 | `python3 -m desk.cli watch` | one scheduled pass; alerts only if actionable |
+| `python3 -m desk.cli bot` | one poll pass: answer the chat's button presses |
+| `python3 -m desk.cli menu` | publish the button menu to the chat |
 | `python3 -m desk.cli serve --interval 15` | the watch loop, for a host with no cron |
 | `python3 -m desk.cli agents` | the roster, with weights |
 | `python3 -m desk.cli memory` | what is in the shared store |
+
+## The Telegram bot — the desk on demand
+
+A button menu in the chat. Press one and the desk answers on the next poll.
+
+```bash
+python3 -m desk.cli menu          # publish the buttons to the chat (once)
+python3 -m desk.cli bot           # one poll pass: read the presses, answer them
+python3 -m desk.cli bot --greet   # also re-publish the menu, then poll
+```
+
+| button | what it does | cost |
+|---|---|---|
+| 📊 تحليل الآن | a full run, then the recommendation | ~7 s, agents + model |
+| 🎯 التوصية الحالية | the last stored reading | instant |
+| 📋 آخر تقرير | the full card from the last run | instant |
+| ⏱️ حالة السوق | a live quote and its age | one HTTP call |
+| 📈 معدل النجاح | the scoreboard | instant |
+
+**Why it polls instead of using a webhook.** A webhook needs a long-lived HTTPS
+endpoint and there is no server here — the desk is a CLI. So the chat is polled
+on a schedule (`marketdesk-bot.yml`, every 5 minutes, free), which means a reply
+lands on the *next* pass rather than instantly. That latency is the price of
+running with no server and no card; the design is deliberate.
+
+**The cursor lives at Telegram, not here.** A runner is a fresh VM with no disk,
+so a local "last seen" pointer would be lost and every pass would replay the
+same press. `getUpdates` carries the cursor forward in the same call, which makes
+each pass idempotent with no state of ours to lose. A press the pass did not
+reach is left unconfirmed, so Telegram redelivers it instead of dropping it.
+
+Only the configured chat may press a button; anything else is refused.
 
 ## The scoreboard — the desk's record
 

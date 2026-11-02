@@ -1,0 +1,73 @@
+name: marketdesk-bot
+
+# The button on the Telegram chat, served without a server.
+#
+# A webhook would need a long-lived HTTPS endpoint; this repository has none.
+# So the chat is polled instead: every five minutes a runner asks Telegram what
+# was pressed and answers it. That is free and serverless, at the cost of
+# latency -- a reply lands on the next pass, not instantly.
+#
+# The state is confirmed to Telegram, not kept locally. A runner is a fresh VM
+# with no disk, so a local "last seen" pointer would be lost and every pass
+# would replay the same press. `getUpdates` carries the cursor forward, which
+# makes the pass idempotent with nothing of ours to lose.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      publish_menu:
+        description: "Publish the button menu to the chat (run once to get the buttons)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: marketdesk-bot
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # restore-only: the watch workflow owns this cache key. Saving here too
+      # would race it, and the loser's write is discarded.
+      - name: Restore desk state
+        uses: actions/cache/restore@v4
+        with:
+          path: marketdesk/data
+          key: desk-state-${{ github.run_id }}
+          restore-keys: desk-state-
+
+      - name: Install the desk
+        run: pip install -e marketdesk
+
+      # A silent run cannot be told apart from an unconfigured one, so the
+      # presence of the secrets is stated explicitly -- never their values.
+      - name: Check the secrets are wired
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          for v in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GROQ_API_KEY; do
+            val="${!v}"
+            if [ -z "$val" ]; then echo "$v: MISSING"; else echo "$v: set (length ${#val})"; fi
+          done
+
+      - name: Answer the chat
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python3 -m desk.cli bot --budget 240 ${{ inputs.publish_menu && '--greet' || '' }}
