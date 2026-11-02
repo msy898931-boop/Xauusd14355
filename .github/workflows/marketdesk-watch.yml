@@ -59,6 +59,24 @@ jobs:
       - name: Install the desk
         run: pip install -e marketdesk
 
+      # Reports PRESENCE, never a value. The desk is silent by design, so a
+      # missing secret and "no signal yet" look identical from outside; this is
+      # the honest way to tell "not configured" from "quiet".
+      - name: Check the secrets are wired
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          for v in TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID GROQ_API_KEY; do
+            val="${!v}"
+            if [ -z "$val" ]; then
+              echo "$v: MISSING"
+            else
+              echo "$v: set (length ${#val})"
+            fi
+          done
+
       - name: One watch pass
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
