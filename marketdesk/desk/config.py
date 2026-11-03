@@ -121,6 +121,11 @@ class Settings:
     # open, which is only sane when nothing else can reach it.
     webhook_secret: str = field(
         default_factory=lambda: os.environ.get("DESK_WEBHOOK_SECRET", ""))
+    # Watch the scenario triggers (breakout/breakdown) as well as the plan. A
+    # desk that says "no trade" still prints scenarios, so a plan-only watcher
+    # goes silent exactly when the market is deciding something. Set
+    # DESK_WATCH_SCENARIOS=0 to watch the plan alone.
+    watch_scenarios: bool = os.environ.get("DESK_WATCH_SCENARIOS", "1") != "0"
 
     @property
     def shared_db(self) -> Path:

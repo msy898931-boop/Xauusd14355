@@ -157,6 +157,98 @@ def from_recommendation(rec: dict, live: float) -> tuple[Level, ...]:
     return tuple(out)
 
 
+def from_scenarios(settings, live: float, *, symbol: str | None = None) -> tuple[Level, ...]:
+    """The triggers the desk's own scenario set is built around, as watchable
+    levels.
+
+    `from_recommendation` watches the PLAN -- entry, stop, first target. This
+    watches the SCENARIOS, which answer the next question: "if price does X,
+    what then?". They are different prices. A desk that says "no trade" still
+    prints scenarios, so a plan-only watcher goes silent exactly when the market
+    is deciding something -- the moment the trader most wants to hear.
+
+    The levels are read from what a run already stored, and the build is
+    read-only over shared memory (no agent, no model, no network beyond the
+    quote the caller already fetched). Measured at ~5 ms, so a check every few
+    seconds is free.
+
+    Returns () when there is nothing to build from, so the caller falls back
+    rather than watching nothing.
+    """
+    from . import scenarios as S
+    from .memory import SharedMemory
+
+    symbol = symbol or settings.symbol
+    shared = SharedMemory(settings.shared_db)
+    frames: dict[str, list[dict]] = {}
+    for tf in settings.timeframes:
+        rows = shared.load_candles(symbol, tf)
+        frames[tf] = [{"t": r["open_time"], "o": r["open"], "h": r["high"],
+                       "l": r["low"], "c": r["close"], "open": bool(r["is_open"])}
+                      for r in rows]
+    sc = S.build(frames, live, shared.load_calendar(),
+                 window_h=settings.event_window_h, symbol=symbol)
+    labels = {"breakout": "اختراق صعود", "breakdown": "كسر هبوط", "deeper": "هبوط أعمق"}
+    out: list[Level] = []
+    for item in sc.get("scenarios") or []:
+        trigger = item.get("trigger")
+        if trigger is None:
+            continue
+        # A long breakout is confirmed ABOVE its level; a short breakdown BELOW.
+        side = "above" if item.get("side") == "long" else "below"
+        out.append(Level(
+            float(trigger), labels.get(item.get("kind", ""), str(item.get("kind"))), side,
+            f"سيناريو {item.get('frame')} · تأكيد {item.get('confirm')} · "
+            f"R:R {item.get('rr')}"))
+    return tuple(out)
+
+
+def _dedupe(levels: list[Level]) -> list[Level]:
+    """Drop a level that repeats a price already in the list, keeping the first.
+
+    The plan and the scenario set can name the same shelf from two angles; two
+    alerts for one price is the noise this module exists to avoid. First wins, so
+    the plan's own label (the more specific one) is kept.
+    """
+    out: list[Level] = []
+    seen: set[float] = set()
+    for lv in levels:
+        key = round(lv.price, 2)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(lv)
+    return out
+
+
+def _auto_levels(settings, live: float, *, symbol: str | None = None) -> tuple[Level, ...]:
+    """The levels to watch when the caller names none.
+
+    The desk's own last plan, plus -- unless switched off -- its own scenario
+    triggers. The hand-typed DEFAULT_LEVELS is the last resort, not the default:
+    a number typed days ago watches a trade nobody is in.
+    """
+    from .memory import SharedMemory
+
+    levels: list[Level] = []
+    try:
+        rows = SharedMemory(settings.shared_db).recent_runs(1)
+        if rows:
+            raw = rows[0]["payload"] or {}
+            payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            rec = payload.get("recommendation") or payload
+            if isinstance(rec, dict):
+                levels.extend(from_recommendation(rec, live))
+    except Exception:  # noqa: BLE001 - a bad payload must not stop the watch
+        pass
+    if getattr(settings, "watch_scenarios", True):
+        try:
+            levels.extend(from_scenarios(settings, live, symbol=symbol))
+        except Exception:  # noqa: BLE001 - a missing frame must not stop the watch
+            pass
+    return tuple(_dedupe(levels)) or DEFAULT_LEVELS
+
+
 def watch_once(settings, *, symbol: str | None = None, within: float = 12.0,
                notifier=None, levels=None) -> dict:
     """One pass over the watched levels: alert once per break and once per
@@ -168,31 +260,19 @@ def watch_once(settings, *, symbol: str | None = None, within: float = 12.0,
     spam or miss. The ledger keys on level+side, so a pass that runs every few
     seconds during a session still sends each signal exactly once.
 
-    With no explicit `levels`, the desk's OWN last plan is watched -- its entry,
-    stop and first target -- falling back to the hand-typed list only when there
-    is no plan to read. That is the difference between an alert that fires on the
-    trade the desk described and one that fires on a number typed days ago.
+    With no explicit `levels`, the desk's OWN last plan and its own SCENARIO
+    triggers are watched -- the entry, the stop, the first target, and the
+    breakout/breakdown levels the scenarios are built around. That is the
+    difference between an alert that fires on the trade the desk described and
+    one that fires on a number typed days ago.
     """
     from . import sources
-    from .memory import SharedMemory
     from .notify import Notifier, SignalLedger
 
     symbol = symbol or settings.symbol
-    if levels is None:
-        levels = DEFAULT_LEVELS
-        try:
-            rows = SharedMemory(settings.shared_db).recent_runs(1)
-            if rows:
-                raw = rows[0]["payload"] or {}
-                payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
-                rec = payload.get("recommendation") or payload
-                if isinstance(rec, dict):
-                    own = from_recommendation(rec, 0.0)
-                    if own:
-                        levels = own
-        except Exception:  # noqa: BLE001 - a bad payload must not stop the watch
-            levels = DEFAULT_LEVELS
     live = float(sources.fetch_quote(symbol)["mid"])
+    if levels is None:
+        levels = _auto_levels(settings, live, symbol=symbol)
     hits = triggered(live, levels)
     near = approaching(live, levels, within=within)
     ledger = SignalLedger(settings.signal_ledger)

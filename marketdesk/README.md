@@ -212,6 +212,29 @@ gate, above `DESK_ALERT_SCORE` (default 0.25) — and a signal already sent is n
 sent again. Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable it; with
 neither set the desk stays silent rather than half-alerting.
 
+### Level alerts — the moment a plan is decided
+
+The desk alerts on its own verdict. `desk levels` alerts on the levels a plan is
+built around, which is a different question: the orchestrator can say "no trade"
+for weeks while the price sits between a trigger and a stop, and the trader still
+wants to know the moment one side is decided.
+
+The watched levels are the desk's own, read from what a run already stored:
+
+* the **plan** — its entry, its stop, its first target;
+* the **scenarios** — the breakout and breakdown triggers, which is what happens
+  if the plan never fills.
+
+A desk that says "no trade" still prints scenarios, so a plan-only watcher goes
+silent exactly when the market is deciding something. Set
+`DESK_WATCH_SCENARIOS=0` to watch the plan alone. The hand-typed list in
+`levels.py` is only the fallback: a number typed days ago watches a trade nobody
+is in.
+
+A level fires once — the ledger keys on level and side — so a check every few
+seconds does not repeat itself, and crossing back and forth is one signal, not
+two. A proximity warning has its own key, so a level can warn and then fire.
+
 ## Running it always-on
 
 On a scheduler the desk had to be two loops that never spoke: `serve` read the
@@ -334,6 +357,9 @@ a disk on a paid plan.
 | `DESK_SYMBOL` | `XAUUSD` | the instrument read |
 | `DESK_MODEL` | `openai/gpt-oss-120b` | Groq model for narration |
 | `DESK_BUDGET_S` | `60` | wall-clock ceiling for one run |
+| `DESK_WATCH_SCENARIOS` | `1` | also watch the scenario triggers, not just the plan |
+| `DESK_WEBHOOK_BASE` | — | public base URL; set → Telegram pushes instead of polling |
+| `DESK_WEBHOOK_SECRET` | — | shared secret Telegram echoes back on every push |
 | `GROQ_API_KEY` | — | unset → deterministic summaries, no model |
 
 ## Data source

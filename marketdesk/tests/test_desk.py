@@ -403,6 +403,94 @@ def test_actionable_only_for_live_confident_calls(tmp_path, monkeypatch):
     assert ok is True and fp.startswith("XAUUSD:short")
 
 
+def test_levels_from_scenarios_watch_the_triggers_the_desk_printed(tmp_path):
+    """The scenario triggers must become watchable levels, on the correct side.
+
+    This is the fix for a real gap: the desk printed "break below 3,919.49" in
+    its scenarios while the alert watched a hand-typed number. The level the
+    plan actually hinged on had no alert at all, so the trade the desk described
+    could not be entered by anyone reading its own alerts.
+    """
+    from desk.levels import from_scenarios, triggered
+
+    s = _settings(tmp_path)
+    shared = SharedMemory(s.shared_db)
+    for tf in s.timeframes:
+        shared.save_candles(s.symbol, tf, _wave(220, period=40, amp=30, base=3000,
+                                                drift=-3.0))
+    live = 3000.0
+    lv = from_scenarios(s, live)
+    assert lv, "a full frame set must yield scenario levels"
+    # A long breakout is confirmed ABOVE its trigger; a short breakdown BELOW.
+    for level in lv:
+        if "اختراق" in level.label:
+            assert level.side == "above"
+        else:
+            assert level.side == "below"
+    # A level on its breaking side fires; one on the far side does not.
+    above = [x for x in lv if x.side == "above"]
+    if above:
+        assert above[0] in triggered(above[0].price + 1.0, lv)
+        assert above[0] not in triggered(above[0].price - 1.0, lv)
+
+
+def test_auto_levels_include_both_the_plan_and_the_scenarios(tmp_path, monkeypatch):
+    """The plan and the scenarios name different prices, and both matter: the
+    plan is the trade, the scenarios are what happens if it does not trigger. A
+    plan-only watcher goes silent exactly when the market is deciding."""
+    from desk.levels import _auto_levels, from_recommendation, from_scenarios
+
+    s = _settings(tmp_path)
+    shared = SharedMemory(s.shared_db)
+    for tf in s.timeframes:
+        shared.save_candles(s.symbol, tf, _wave(220, period=40, amp=30, base=3000,
+                                                drift=-3.0))
+    rec = {"direction": "short", "entry": 3000.0, "stop": 3015.0,
+           "targets": [{"level": 2970.0}]}
+    shared.save_run("r1", s.symbol, 0.0, 1.0, "short", -0.3,
+                    {"recommendation": rec})
+
+    live = 3000.0
+    auto = _auto_levels(s, live)
+    plan = from_recommendation(rec, live)
+    scen = from_scenarios(s, live)
+    assert plan, "the plan must produce levels"
+    assert scen, "the scenarios must produce levels"
+    for level in plan:
+        assert level in auto
+    assert any(x in auto for x in scen), "scenario triggers must be watched too"
+
+
+def test_auto_levels_do_not_repeat_a_price(tmp_path):
+    """The plan and the scenario set can name the same shelf; two alerts for one
+    price is the noise the ledger exists to avoid."""
+    from desk.levels import Level, _dedupe
+
+    dup = (Level(3000.0, "أ", "below", "x"), Level(3000.0, "ب", "above", "y"),
+           Level(3001.0, "ج", "below", "z"))
+    out = _dedupe(list(dup))
+    assert [x.label for x in out] == ["أ", "ج"]      # first wins
+
+
+def test_watching_the_scenarios_can_be_switched_off(tmp_path):
+    """DESK_WATCH_SCENARIOS=0 watches the plan alone. An operator who finds the
+    scenario alerts noisy must be able to silence them without a code change."""
+    from desk.levels import _auto_levels, from_recommendation
+
+    s = _settings(tmp_path)
+    shared = SharedMemory(s.shared_db)
+    for tf in s.timeframes:
+        shared.save_candles(s.symbol, tf, _wave(220, period=40, amp=30, base=3000,
+                                                drift=-3.0))
+    rec = {"direction": "short", "entry": 3000.0, "stop": 3015.0,
+           "targets": [{"level": 2970.0}]}
+    shared.save_run("r1", s.symbol, 0.0, 1.0, "short", -0.3,
+                    {"recommendation": rec})
+    s.watch_scenarios = False
+    auto = _auto_levels(s, 3000.0)
+    assert set(auto) == set(from_recommendation(rec, 3000.0))
+
+
 def test_watch_once_does_not_alert_when_signal_repeats(tmp_path, monkeypatch):
     """The watcher must send a given signal once, not once per pass."""
     s = _settings(tmp_path)
