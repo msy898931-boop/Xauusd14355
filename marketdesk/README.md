@@ -334,3 +334,41 @@ labelled as they are found: in this data the long side is supported (n=47,
 +0.915R, t=+4.80) and the short side is noise (n=16, t=-0.10). The plan also
 states that the trigger adds only +0.015R over always-long, so the long side's
 profit is the market's drift rather than a proven edge in the trigger.
+
+## Long history and the cross-market test
+
+The desk's own history is ~500 daily bars (about 20 months), and that ceiling is
+the single biggest limit on what can be claimed. `desk longdata` pulls 10+ years
+of daily bars for seven markets from Yahoo's keyless chart API into the desk's CSV
+shape, and `desk crossmarket` runs the same trend rule, unchanged, on every one.
+
+```
+cd marketdesk && python3 -m desk.cli longdata --out ../longdata --range 10y
+cd marketdesk && python3 -m desk.cli crossmarket --dir ../longdata
+```
+
+The result is negative, and it is the most useful thing the desk has produced:
+
+| market | bars | trend | best constant | trend - best | t |
+|---|---|---|---|---|---|
+| XAUUSD | 2514 | +0.299 | +0.255 (alwaysL) | +0.045 | +1.55 |
+| XAGUSD | 2513 | +0.023 | +0.194 (alwaysL) | -0.171 | -4.89 |
+| EURUSD | 2601 | -0.066 | +0.069 (alwaysS) | -0.135 | -4.29 |
+| USDJPY | 2601 | +0.153 | +0.191 (alwaysL) | -0.038 | -1.40 |
+| USOIL | 2514 | +0.064 | +0.186 (alwaysL) | -0.122 | -3.92 |
+| SPX | 2512 | +0.105 | +0.244 (alwaysL) | -0.139 | -5.83 |
+| DXY | 2514 | -0.018 | +0.087 (alwaysL) | -0.105 | -3.17 |
+
+**0 of 7 markets.** The signal does not beat a constant chosen over the whole
+sample on any of them. The baseline is one constant, not `max(long, short)` per
+bar -- the latter is an oracle no trader can hold, and using it would make the
+comparison meaningless.
+
+The window-sensitivity table answers why the desk's 500-bar result looked good:
+gold over its last 500 bars shows +0.159R (t=+2.97), and over the full 2514 bars
+the same rule shows +0.045R (t=+1.55). **The result was the sample size, not the
+rule.** A rule that is significant in one window and noise in the full sample was
+never a rule.
+
+This is why the desk's recommendation is honest about being a reading, not a
+proven edge.

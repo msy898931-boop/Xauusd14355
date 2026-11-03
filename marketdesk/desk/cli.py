@@ -72,6 +72,39 @@ def cmd_hitrate(args) -> int:
     return 0
 
 
+def cmd_crossmarket(args) -> int:
+    """Does the trend signal generalise across markets, or was it one drift?"""
+    from pathlib import Path
+
+    from .crossmarket import run_crossmarket
+
+    print(run_crossmarket(Path(args.dir), markets=args.markets))
+    return 0
+
+
+def cmd_longdata(args) -> int:
+    """Download long daily history for several markets into the desk's CSV shape."""
+    from pathlib import Path
+
+    from .longdata import MARKETS, fetch, write_csv
+
+    outdir = Path(args.out)
+    rng = args.range
+    print(f"fetching {len(MARKETS)} markets, range={rng} -> {outdir}/")
+    for name, sym in MARKETS.items():
+        try:
+            bars = fetch(sym, rng)
+            if not bars:
+                print(f"  {name:7} {sym:10} -> no bars")
+                continue
+            write_csv(bars, outdir / f"{name}_1d.csv")
+            print(f"  {name:7} {sym:10} -> {len(bars):5} bars  "
+                  f"{bars[0]['openTime'][:10]} .. {bars[-1]['openTime'][:10]}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  {name:7} {sym:10} -> FAILED {exc}")
+    return 0
+
+
 def cmd_levels(args) -> int:
     """One pass: alert once for each watched level the price has crossed.
 
@@ -313,6 +346,17 @@ def main(argv=None) -> int:
     h = sub.add_parser("hit-rate", help="grade past runs against what price did")
     h.add_argument("--symbol", default=None)
     h.set_defaults(func=cmd_hitrate)
+
+    cm = sub.add_parser("crossmarket",
+                        help="test whether the trend signal generalises")
+    cm.add_argument("--dir", default="../longdata")
+    cm.add_argument("--markets", nargs="*", default=None)
+    cm.set_defaults(func=cmd_crossmarket)
+
+    ld = sub.add_parser("longdata", help="download 10y daily history, several markets")
+    ld.add_argument("--out", default="../longdata")
+    ld.add_argument("--range", default="10y")
+    ld.set_defaults(func=cmd_longdata)
 
     lv = sub.add_parser("levels", help="alert once when price crosses a watched level")
     lv.set_defaults(func=cmd_levels)

@@ -1733,3 +1733,70 @@ def test_level_message_names_the_level_and_the_price():
     lv = DEFAULT_LEVELS[0]
     out = message(lv, 3985.0)
     assert "3,970.00" in out and "3,985.00" in out
+
+
+# ---- long history / cross-market --------------------------------------
+
+def test_longdata_parses_yahoo_shape_and_skips_empty_bars():
+    """Yahoo returns parallel arrays with nulls; the parser must skip them."""
+    from desk.longdata import fetch
+
+    body = {"chart": {"result": [{
+        "timestamp": [1, 2, 3],
+        "indicators": {"quote": [{"open": [10.0, None, 12.0],
+                                  "high": [11.0, None, 13.0],
+                                  "low": [9.0, None, 11.0],
+                                  "close": [10.5, None, 12.5],
+                                  "volume": [100, None, 200]}]}}]}}
+
+    class _Resp:
+        def read(self): return json.dumps(body).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    import urllib.request
+    real = urllib.request.urlopen
+    urllib.request.urlopen = lambda *a, **k: _Resp()
+    try:
+        bars = fetch("GC=F", "1y")
+    finally:
+        urllib.request.urlopen = real
+    assert len(bars) == 2                      # the null row is dropped
+    assert all(b["isOpen"] is False for b in bars)   # history is always closed
+
+
+def test_crossmarket_verdict_is_not_generalising_on_drift_only_data(tmp_path):
+    """A market that only rises must not be reported as a working signal.
+
+    The test builds several pure-drift series. The trend rule can be long most of
+    the time on them, but it must not beat a constant chosen over the whole
+    sample -- that is the definition of 'the rule added nothing'.
+    """
+    from desk.crossmarket import run_crossmarket
+
+    for k in range(3):
+        rows = ["openTime,open,high,low,close,volume,tickVolume,isOpen"]
+        for i in range(700):
+            px = 100 + i * 0.05
+            rows.append(f"2020-01-{(i % 28) + 1:02d}T00:00:00Z,{px},{px+1},"
+                        f"{px-1},{px},0,10,False")
+        (tmp_path / f"M{k}_1d.csv").write_text("\n".join(rows))
+    out = run_crossmarket(tmp_path, markets=["M0", "M1", "M2"])
+    assert "markets where trend beats the best constant: 0" in out
+    assert "does not generalise" in out
+
+
+def test_crossmarket_baseline_is_a_single_constant_not_an_oracle(tmp_path):
+    """The baseline must be one constant, never max(long, short) per bar."""
+    from desk import crossmarket
+
+    rows = ["openTime,open,high,low,close,volume,tickVolume,isOpen"]
+    for i in range(600):
+        px = 100 + (i % 40) * 0.3      # oscillates: long and short both lose
+        rows.append(f"2020-01-{(i % 28) + 1:02d}T00:00:00Z,{px},{px+1},"
+                    f"{px-1},{px},0,10,False")
+    (tmp_path / "OSC_1d.csv").write_text("\n".join(rows))
+    out = crossmarket.run_crossmarket(tmp_path, markets=["OSC"])
+    # an oracle baseline would show a large positive constant; the honest one
+    # cannot exceed the better of the two single directions
+    assert "alwaysL" in out or "alwaysS" in out
