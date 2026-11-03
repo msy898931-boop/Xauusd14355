@@ -1,32 +1,38 @@
 # Render blueprint for MarketDesk alerting (Xauusd14355).
 #
-# WHY A CRON JOB AND NOT A WEB SERVICE
-# MarketDesk has no HTTP server -- it is a CLI plus a watch loop. A Render *web*
-# service would also sleep after ~15 minutes with no inbound traffic, and a
-# long poll is outbound traffic, so it would not count as activity. A cron job
-# runs one pass per trigger and exits, which is exactly the shape of `watch`.
+# ONE SERVICE, AND WHY IT MUST STAY ONE
+# The free tier gives a workspace 750 instance-hours a month, shared across ALL
+# free services -- not 750 each. A single always-on web service already spends
+# 720-744 h (30-31 days x 24). A SECOND free service running even 20 h pushes the
+# workspace to 764 h, over the cap, and Render suspends EVERY free service in the
+# workspace until the next month. So a "belt-and-braces" second service does not
+# back the desk up -- it takes the desk down. One service it is.
 #
-# COST: Render Cron Jobs and Background Workers have NO free instance type; a
-# cron service bills ~$1/month minimum, prorated by the second. The Free tier
-# covers static sites and web services only.
+# WHY A WEB SERVICE AND NOT A CRON JOB
+# Render Cron Jobs have NO free instance type: the cheapest bills ~$1/month
+# (prorated by the second, $1 minimum per service). A web service is free. And a
+# *web* service can serve the chat, which a cron job cannot: Telegram pushes a
+# press to an INBOUND endpoint (answered the instant it happens), and `/health`
+# is inbound traffic, so a plain uptime ping keeps a free instance awake. A long
+# poll is entirely outbound and would never wake a sleeping host, so `--web` is
+# what makes the free tier usable here at all.
 #
-# STATE: the alert dedupe ledger lives under DESK_HOME. Without a mounted disk it
-# is lost on every restart, so a signal already sent could be re-sent. Mount a
-# Render Disk at /var/data (paid) or accept the reset deliberately.
+# THE CRON FALLBACK IS DELIBERATELY ABSENT
+# It used to be here as a second opinion. It cannot be: see the hour budget
+# above. The always-on service already checks the levels every 30s and re-reads
+# the market every 15 min, which is strictly more than a 15-minute cron did.
+#
+# CAVEATS of the free instance (512 MB / 0.1 CPU, no disk):
+#   * no persistent disk -> DESK_HOME is lost on every restart, so the alert
+#     ledger forgets what it sent. Either accept a rare duplicate alert, or add
+#     a disk on a paid plan ($0.25/GB/month).
+#   * 0.1 CPU -> keep the level cadence coarse (30-60s), not the 10s default.
+#   * 5 GB outbound bandwidth a month (Hobby, since Apr 2026). Measured need is
+#     ~0.6 GB/month, so this is not close -- but it is the cap that suspends the
+#     service if something ever goes into a loop.
 services:
   # ---- the always-on desk (web service) --------------------------------
-  # One resident process: the chat, the levels, and the readings. The chat is
-  # served by an INBOUND endpoint, which is the point -- Telegram pushes a press
-  # (answered the instant it happens) and `/health` is inbound traffic, so a free
-  # instance is kept awake by a plain uptime ping. A long poll is entirely
-  # outbound and would never wake a sleeping host, so `--web` is what makes the
-  # free tier usable here at all.
-  #
-  # CAVEATS of the free instance (512 MB / 0.1 CPU, no disk):
-  #   * no persistent disk -> DESK_HOME is lost on every restart, so the alert
-  #     ledger forgets what it sent. Either accept a rare duplicate alert, or add
-  #     a disk on a paid plan.
-  #   * 0.1 CPU -> keep the level cadence coarse (30-60s), not the 10s default.
+  # One resident process: the chat, the levels, and the readings.
   - type: web
     name: marketdesk-daemon
     runtime: docker
@@ -62,46 +68,3 @@ services:
       # rejected before it reaches an action. Generate any random string.
       - key: DESK_WEBHOOK_SECRET
         sync: false
-
-  # ---- the cron fallback (free) ----------------------------------------
-  # One reading every 15 minutes and nothing else. No chat, no sub-15-minute
-  # level check. Kept as a belt-and-braces second opinion if the web service is
-  # ever down. Do NOT point it at the same DESK_HOME as the worker: two processes
-  # would race the ledger and re-send alerts.
-  - type: cron
-    name: marketdesk-watch
-    runtime: python
-    schedule: "*/15 * * * *"          # one reading every 15 minutes
-    # Render runs both commands from the REPO ROOT. The package lives in
-    # marketdesk/, so either install it or cd into it. We do both: the install
-    # makes `desk` importable anywhere, and the cd still works if the install
-    # did not take effect. Verified from a fresh clone -- from the repo root
-    # without either, it fails with "No module named 'desk'".
-    buildCommand: "pip install -e marketdesk"
-    startCommand: "cd marketdesk && python3 -m desk.cli watch"
-    envVars:
-      # Secrets are declared with sync:false so they are set in the Render
-      # dashboard and never written to git.
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_CHAT_ID
-        sync: false
-      - key: GROQ_API_KEY
-        sync: false
-      # Durable state (shared.db, signal_ledger.json, agent memories). Point at
-      # a mounted disk to survive restarts; otherwise it rebuilds each run.
-      - key: DESK_HOME
-        value: /var/data
-      - key: DESK_SYMBOL
-        value: XAUUSD
-      # Alert only on a real, actionable signal above this conviction.
-      - key: DESK_ALERT_SCORE
-        value: "0.25"
-      # A setup is stated only if reward exceeds risk by this factor.
-      - key: DESK_MIN_RR
-        value: "1.5"
-      # The gate closes only for an event this close, in the instrument's currency.
-      - key: DESK_EVENT_WINDOW_H
-        value: "6"
-      - key: PYTHON_VERSION
-        value: "3.13.15"

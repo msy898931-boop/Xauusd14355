@@ -309,10 +309,37 @@ A forged POST is rejected before it reaches an action: Telegram echoes a secret
 back in a header on every push, and the endpoint checks it in constant time.
 `/health` needs no secret — it is the liveness probe, and it must be cheap.
 
-`render.yaml` declares both shapes: a **free web service** running `--web` (kept
-awake by a health ping) and the 15-minute cron as a fallback. The free instance
-has no disk, so `DESK_HOME` is ephemeral — expect a rare duplicate alert, or add
-a disk on a paid plan.
+`render.yaml` declares ONE service: a **free web service** running `--web`, kept
+awake by a health ping. It deliberately does **not** declare the 15-minute cron
+it used to: Render gives a workspace 750 instance-hours a month shared across all
+free services, and a single always-on service already spends 720-744 h — a second
+service running even 20 h would push the workspace over the cap and Render would
+suspend *every* free service in it. The cron was a "belt-and-braces" second
+opinion that would have taken the desk down. One service it is.
+
+The free instance has no disk, so `DESK_HOME` is ephemeral — expect a rare
+duplicate alert, or add a disk on a paid plan ($0.25/GB/month).
+
+### Deploying to Render (free, no card)
+
+1. **render.com → New → Blueprint**, pick the repo. Render reads `render.yaml`
+   and builds `marketdesk-daemon` on its own.
+2. **Set the secrets in the dashboard** (never in git):
+   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `GROQ_API_KEY`, and
+   `DESK_WEBHOOK_SECRET` (any random string, e.g. `openssl rand -hex 16`).
+3. **Keep it awake.** `.github/workflows/marketdesk-keepawake.yml` pings
+   `/health` every 5 minutes from GitHub Actions — free on a public repo, no
+   extra account. If Render appended a suffix to the service name, set a repo
+   variable `DESK_HEALTH_URL` instead of editing the workflow. UptimeRobot also
+   works if you prefer it; it is not required.
+4. **Verify:** `curl https://<service>.onrender.com/health` → `{"ok": true,
+   "service": "marketdesk"}`. The daemon registers its own webhook with Telegram
+   on boot (Render injects `RENDER_EXTERNAL_URL`), so there is no URL to paste.
+
+A free web service still sleeps after 15 minutes with no inbound traffic and
+takes ~1 minute to wake; the keepawake ping is what prevents that. Telegram's
+push would wake it anyway, but the first press after a sleep would wait a minute.
+
 
 ## The roster (8 agents)
 

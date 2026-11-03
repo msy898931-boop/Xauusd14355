@@ -3188,6 +3188,64 @@ def test_daemon_web_mode_registers_the_webhook_and_skips_the_poll(tmp_path, monk
     d.webhook.stop()
 
 
+def test_render_blueprint_stays_inside_the_free_hour_budget():
+    """The blueprint must not declare a second service that breaks the free tier.
+
+    This is a regression guard, not a style check. Render gives a workspace 750
+    instance-hours a month shared across ALL free services, not 750 each. A
+    single always-on web service already spends 720-744 h; a second service
+    running even 20 h pushes the workspace over the cap and Render suspends
+    *every* free service in it. The blueprint used to declare a 15-minute cron
+    as a "belt-and-braces" fallback -- which would have taken the desk down, and
+    a cron has no free instance type anyway ($1/month minimum). The failure mode
+    is a billing/suspension fact, not an exception, so only this test catches it.
+    """
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    doc = yaml.safe_load((root / "render.yaml").read_text())
+    services = doc["services"]
+
+    assert len(services) == 1, (
+        f"render.yaml declares {len(services)} services; the free 750 h/month is "
+        "per workspace, so a second service would suspend the whole workspace")
+    svc = services[0]
+    assert svc["type"] == "web", "only a web service has a free instance type"
+    assert svc["plan"] == "free"
+    assert svc["healthCheckPath"] == "/health"
+
+    # One always-on service must still fit the 750-hour cap on a 31-day month.
+    assert 31 * 24 <= 750, "a single always-on month must fit the free allowance"
+
+    # Every secret is dashboard-set, never written to git.
+    by_key = {e["key"]: e for e in svc["envVars"]}
+    for secret in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "GROQ_API_KEY",
+                   "DESK_WEBHOOK_SECRET"):
+        assert by_key[secret].get("sync") is False, f"{secret} must not be in git"
+
+
+def test_the_keepawake_workflow_pings_health_within_the_sleep_window():
+    """A free Render service sleeps after 15 idle minutes, so the ping cadence
+    must be well inside that -- and it must be a plain `/health` GET, because
+    that is the endpoint that answers without a secret."""
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    path = root / ".github" / "workflows" / "marketdesk-keepawake.yml"
+    doc = yaml.safe_load(path.read_text())
+    cron = doc[True]["schedule"][0]["cron"]          # `on:` parses as True
+    # "*/5 * * * *" -> every 5 minutes, three chances inside a 15-minute window.
+    assert cron.startswith("*/"), f"unexpected cadence {cron!r}"
+    minutes = int(cron.split()[0].lstrip("*/"))
+    assert minutes <= 15, "a cadence wider than the sleep window lets it sleep"
+    step = doc["jobs"]["ping"]["steps"][0]
+    assert "/health" in str(step.get("env", {})) + str(step.get("run", ""))
+
+
 def test_daemon_cadences_can_come_from_the_environment(tmp_path, monkeypatch):
     """A container is tuned by env, not by editing the entrypoint. `render.yaml`
     sets DESK_LEVEL_EVERY=30 for the free 0.1-CPU instance; if the CLI ignored

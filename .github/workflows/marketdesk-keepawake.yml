@@ -1,0 +1,65 @@
+# Keep the Render free instance awake, with no external uptime service.
+#
+# WHY THIS EXISTS
+# A Render free web service spins down after 15 minutes with no INBOUND traffic,
+# and takes ~1 minute to wake. The desk still works while asleep -- Telegram's
+# push wakes it -- but the first press after a sleep costs the user a minute.
+# A ping to /health every few minutes is inbound traffic, so the instance never
+# sleeps and a press is answered the instant it happens.
+#
+# WHY NOT UPTIMEROBOT
+# It works, and its free tier gives 5-minute checks. But it is one more account,
+# one more dashboard, and one more thing that can silently lapse. This repo
+# already runs on GitHub Actions, and a public repository's Actions minutes are
+# free -- so the ping lives here, next to the code it keeps awake, with nothing
+# to sign up for.
+#
+# HONEST LIMITS
+#   * GitHub's `schedule` is best-effort: it can start several minutes late, and
+#     it is skipped entirely if the previous run is still going. That is why the
+#     cron is every 5 minutes against a 15-minute sleep window -- three chances
+#     to land inside it, so a single late or skipped run does not let the service
+#     sleep.
+#   * The default URL assumes the Render service is named `marketdesk-daemon`.
+#     If Render appended a suffix (a name collision), set a repository variable
+#     `DESK_HEALTH_URL` under Settings -> Secrets and variables -> Actions ->
+#     Variables. No code change is needed.
+#   * While the instance is asleep Render answers `/robots.txt` with disallow,
+#     but `/health` still wakes it -- a 200 here means the process is up, which
+#     is the only honest liveness answer for a desk that is silent by design.
+name: marketdesk-keepawake
+
+on:
+  schedule:
+    # Every 5 minutes. See the sleep window note above for why 5 and not 15.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: marketdesk-keepawake
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping the desk
+        env:
+          HEALTH_URL: ${{ vars.DESK_HEALTH_URL || 'https://marketdesk-daemon.onrender.com/health' }}
+        run: |
+          # A cold start takes ~1 minute, so allow for it. A failure here is
+          # expected while the service is first deploying, and must not fail the
+          # job -- a red X for a sleeping instance would train the owner to
+          # ignore the workflow.
+          code=$(curl -s -o /tmp/body -w '%{http_code}' --max-time 90 "$HEALTH_URL" || echo 000)
+          echo "GET $HEALTH_URL -> $code"
+          head -c 200 /tmp/body 2>/dev/null || true
+          echo
+          if [ "$code" = "200" ]; then
+            echo "the desk is awake"
+          else
+            echo "::warning::$HEALTH_URL returned $code (service may still be deploying)"
+          fi
