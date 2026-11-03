@@ -72,6 +72,24 @@ def cmd_hitrate(args) -> int:
     return 0
 
 
+def cmd_gold(args) -> int:
+    """The 10-year gold study: when gold looked like this, what happened next?"""
+    from pathlib import Path
+
+    from .gold import run_gold_study
+
+    live = None
+    if not args.offline:
+        try:
+            from . import sources
+            live = float(sources.fetch_quote(args.symbol or "XAUUSD")["mid"])
+        except Exception:  # noqa: BLE001 - fall back to the last close
+            live = None
+    print(run_gold_study(Path(args.csv), live=live, symbol=args.symbol or "XAUUSD",
+                         stop_atr=args.stop_atr, tgt_atr=args.tgt_atr))
+    return 0
+
+
 def cmd_crossmarket(args) -> int:
     """Does the trend signal generalise across markets, or was it one drift?"""
     from pathlib import Path
@@ -346,6 +364,14 @@ def main(argv=None) -> int:
     h = sub.add_parser("hit-rate", help="grade past runs against what price did")
     h.add_argument("--symbol", default=None)
     h.set_defaults(func=cmd_hitrate)
+
+    gd = sub.add_parser("gold", help="10-year gold study: this state, what next?")
+    gd.add_argument("--csv", default="../longdata/XAUUSD_1d.csv")
+    gd.add_argument("--symbol", default="XAUUSD")
+    gd.add_argument("--offline", action="store_true")
+    gd.add_argument("--stop-atr", type=float, default=0.32)
+    gd.add_argument("--tgt-atr", type=float, default=0.60)
+    gd.set_defaults(func=cmd_gold)
 
     cm = sub.add_parser("crossmarket",
                         help="test whether the trend signal generalises")
