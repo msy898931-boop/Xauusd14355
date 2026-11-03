@@ -135,3 +135,18 @@ shared memory, no agent/model); the cost was never the reason to skip it.
 password prompt** rather than failing: re-point with
 `git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/...`.
 Detail → `2026-11-02.md`.
+
+## Render free tier: the 750 hours are per WORKSPACE (2026-11-02)
+⭐ **750 free instance-hours are shared across ALL free services in a workspace,
+not 750 each.** One always-on service already spends 720-744 h (30-31 × 24); a
+second free service running even 20 h → 764 h → **Render suspends EVERY free
+service until next month**. So a "belt-and-braces" backup service is the failure
+it pretends to prevent. **Render Cron Jobs have no free tier** (~$1/mo min);
+only web services + static sites are free. **A blueprint that parses is not a
+blueprint that works** — validate the resource budget, not the syntax. A failure
+that is a *suspension* rather than an *exception* needs a test or it never shows
+up. **A GitHub Actions cron ping to `/health` replaces UptimeRobot for free** on
+a public repo (5-min cadence vs a 15-min sleep window = three chances).
+Bandwidth: Hobby dropped to **5 GB/mo** (Apr 2026); marketdesk needs ~0.6 GB.
+**marketdesk is NOT deployed to Render** — `render.yaml` existing ≠ deployed.
+Detail → `2026-11-02.md`.
