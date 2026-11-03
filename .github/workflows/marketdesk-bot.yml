@@ -10,9 +10,13 @@ name: marketdesk-bot
 # returns the instant something arrives.
 #
 # WHY A FIVE-MINUTE CRON IS STILL CORRECT
-# The listen window is shorter than the gap between runs, so each run ends
-# cleanly rather than being killed mid-answer. Two runs must never overlap --
-# they would race for the same update -- which `concurrency` enforces.
+# The listen window must fit INSIDE the five-minute gap, with the ~45s of
+# checkout + install on top. It did not: 260s of listening plus setup ran ~5.5
+# minutes, so each run overran the next trigger and `concurrency` kept dropping
+# the one behind it -- the schedule fired, but most runs were skipped. 200s of
+# listening leaves ~1.5 minutes of headroom, so a run ends before the next one
+# is due and nothing is dropped. Two runs must never overlap -- they would race
+# for the same update -- which `concurrency` also enforces.
 #
 # The state is confirmed to Telegram, not kept locally. A runner is a fresh VM
 # with no disk, so a local "last seen" pointer would be lost and every pass
@@ -73,13 +77,14 @@ jobs:
             if [ -z "$val" ]; then echo "$v: MISSING"; else echo "$v: set (length ${#val})"; fi
           done
 
-      # 260s of listening inside a 5-minute cron: the run ends with margin, and
-      # the next one starts after it. A press lands in about a second.
+      # 200s of listening inside a 5-minute cron, leaving room for the ~45s of
+      # checkout + install: the run ends with margin, and the next one starts
+      # after it. A press lands in about a second.
       - name: Listen for presses
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
-          python3 -m desk.cli bot --listen --seconds 260 \
+          python3 -m desk.cli bot --listen --seconds 200 \
             ${{ inputs.publish_menu && '--greet' || '' }}
