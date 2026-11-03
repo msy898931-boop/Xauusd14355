@@ -96,16 +96,23 @@ class Report:
 
 
 def load_daily(path: Path) -> list[dict]:
-    """The stored daily bars, oldest first, in the shape `save_candles` wants."""
+    """The stored daily bars, oldest first, in the shape `save_candles` wants.
+
+    The `isOpen` flag is carried through from the CSV, NOT forced to False. The
+    last row of a live pull is the bar still forming: its high/low/close move
+    with the tick, so an indicator read off it is not a fact. Forcing it closed
+    is the same look-at-the-partial-bar mistake the desk already fixed once.
+    """
     out = []
     with path.open() as fh:
         for row in csv.DictReader(fh):
+            raw = (row.get("isOpen") or "").strip().lower()
             out.append({
                 "openTime": row["openTime"],
                 "open": float(row["open"]), "high": float(row["high"]),
                 "low": float(row["low"]), "close": float(row["close"]),
                 "tickVolume": int(float(row.get("tickVolume") or 0)),
-                "isOpen": False,
+                "isOpen": raw in ("true", "1", "yes"),
             })
     return sorted(out, key=lambda b: b["openTime"])
 
@@ -134,8 +141,13 @@ def run_backtest(csv_path: Path, *, symbol: str = "XAUUSD", warmup: int = 120,
     fail-closed behaviour the live desk shows when a source read fails.
     """
     bars = load_daily(csv_path)
+    # A bar still forming is not a fact: its high/low/close move with the tick,
+    # so grading a trade against it invents touches that may never have happened.
+    # Drop it and walk closed bars only.
+    bars = [b for b in bars if not b.get("isOpen")]
     if len(bars) <= warmup + max(horizons):
-        raise ValueError(f"not enough history: {len(bars)} bars, need > {warmup + max(horizons)}")
+        raise ValueError(f"not enough history: {len(bars)} closed bars, "
+                         f"need > {warmup + max(horizons)}")
 
     # ISOLATION IS NOT OPTIONAL. `save_candles` upserts and never deletes, so a
     # reused store keeps every bar a previous pass wrote -- including bars from

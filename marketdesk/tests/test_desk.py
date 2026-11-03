@@ -1586,3 +1586,46 @@ def test_scan_reports_a_family_that_does_not_hold_out_of_sample(tmp_path):
     assert "controls" in out
     # The scan must never present a family without the controls beside it.
     assert "always long" in out and "always short" in out
+
+
+def test_load_daily_carries_the_open_flag(tmp_path):
+    """A bar still forming is not a fact, so the flag must survive the load.
+
+    `load_daily` used to hardcode `isOpen: False`, which made the backtest grade
+    trades against a bar whose high/low/close were still moving -- the same
+    look-at-the-partial-bar mistake the desk fixed once already.
+    """
+    import csv as _csv
+
+    from desk.backtest import load_daily
+
+    p = tmp_path / "XAUUSD_1d.csv"
+    with p.open("w", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["openTime", "open", "high", "low", "close", "volume",
+                    "tickVolume", "isOpen"])
+        w.writerow(["2026-01-01T00:00:00Z", 1, 2, 0.5, 1.5, 0, 10, "False"])
+        w.writerow(["2026-01-02T00:00:00Z", 1, 2, 0.5, 1.5, 0, 10, "True"])
+    bars = load_daily(p)
+    assert bars[0]["isOpen"] is False
+    assert bars[1]["isOpen"] is True
+
+
+def test_backtest_drops_the_still_forming_bar(tmp_path):
+    """The walk must not grade against the live, still-moving last bar."""
+    from desk.backtest import load_daily
+
+    p = tmp_path / "XAUUSD_1d.csv"
+    with p.open("w", newline="") as fh:
+        import csv as _csv
+
+        w = _csv.writer(fh)
+        w.writerow(["openTime", "open", "high", "low", "close", "volume",
+                    "tickVolume", "isOpen"])
+        for i in range(200):
+            w.writerow([f"2025-{(i // 28) % 12 + 1:02d}-{i % 28 + 1:02d}T00:00:00Z",
+                        3000 + i, 3002 + i, 2998 + i, 3000 + i, 0, 10,
+                        "True" if i == 199 else "False"])
+    bars = [b for b in load_daily(p) if not b.get("isOpen")]
+    assert len(bars) == 199
+    assert bars[-1]["isOpen"] is False
