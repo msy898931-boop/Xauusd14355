@@ -40,10 +40,13 @@ class VolatilityAgent(Agent):
         if d.get("atr_pct") is not None:
             regime = ("high" if d["atr_pct"] > 2.0
                       else "normal" if d["atr_pct"] > 0.8 else "low")
-        # Volatility is not directional; it moderates confidence elsewhere.
+        # Volatility is not directional, so it casts NO directional vote. It used
+        # to return -0.2 in a high-volatility regime -- a one-sided bearish vote
+        # from an agent that says in the same breath that it is not directional.
+        # It entered the tally at weight 0.8, and the backtest showed the effect:
+        # the agent was bear 46% of the time and bull never. The regime is in the
+        # payload, where the risk gate and the stop sizing already read it.
         score = 0.0
-        if regime == "high":
-            score = -0.2     # a wide tape punishes chasing
         facts = ("; ".join(f"{tf}: ATR {d.get('atr')} ({d.get('atr_pct')}%)"
                            for tf, d in per.items())
                  + f"; day change {day_pct}%; regime {regime}")

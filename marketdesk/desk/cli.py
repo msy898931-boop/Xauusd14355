@@ -72,6 +72,21 @@ def cmd_hitrate(args) -> int:
     return 0
 
 
+def cmd_scan(args) -> int:
+    """Ask the prior question: is there any edge in the data at all?
+
+    Tests five standard signal families with no selection and no tuning, prints
+    the constant-direction controls beside them, and splits the sample so a
+    signal that only lives in one half is visible. A command, not an argument.
+    """
+    from pathlib import Path
+
+    from .scan import run_scan
+
+    print(run_scan(Path(args.csv)))
+    return 0
+
+
 def cmd_backtest(args) -> int:
     """Walk the stored daily bars and grade every plan the desk would have made.
 
@@ -241,6 +256,11 @@ def main(argv=None) -> int:
     h = sub.add_parser("hit-rate", help="grade past runs against what price did")
     h.add_argument("--symbol", default=None)
     h.set_defaults(func=cmd_hitrate)
+
+    sc = sub.add_parser("scan", help="test standard signals for any edge at all")
+    sc.add_argument("--csv", default="../biquote/XAUUSD_1d.csv",
+                    help="daily bar CSV to scan")
+    sc.set_defaults(func=cmd_scan)
 
     bt = sub.add_parser("backtest", help="grade the method on stored daily bars")
     bt.add_argument("--symbol", default=None)

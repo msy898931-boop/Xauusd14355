@@ -120,6 +120,14 @@ python3 -m ruff check .             # lint
     answered, the older ones are confirmed and acknowledged in the first reply
     with a count. Both extremes are wrong: silence loses the request, and a
     burst of 18 replies is unreadable.
+25. **A non-directional agent must cast no directional vote.** The volatility
+    agent said in its own comment that it is not directional, then returned
+    -0.2 in a high-volatility regime. It entered the tally at weight 0.8, and
+    the effect was visible in the data: the agent was bear 46% of the time and
+    bull never. The orchestrator now skips `kind in ("risk", "volatility")` by
+    kind, not by name, so a future non-directional agent cannot silently become
+    a permanent bias. **A "neutral" score that is only ever negative is a bias
+    with a disclaimer.**
 26. **A backtest that reuses the live store reads the future.** `save_candles`
     upserts and never deletes, so a store that held bars from a previous pass
     still holds them -- including bars *after* the one being decided. The first

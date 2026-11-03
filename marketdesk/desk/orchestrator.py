@@ -146,8 +146,11 @@ class Orchestrator:
         weighted = 0.0
         wsum = 0.0
         for s in studies:
-            if s.agent == "risk":
-                continue           # the gate is not a directional vote
+            if s.kind in ("risk", "volatility"):
+                # Neither is a directional vote: the gate vetoes, and volatility
+                # only sets the regime. Tallying either as a direction is how a
+                # non-directional agent quietly becomes a permanent bias.
+                continue
             w = next((a.weight for a in self.agents if a.name == s.agent), 1.0)
             weighted += s.score * w * (0.5 + 0.5 * s.confidence)
             wsum += w
