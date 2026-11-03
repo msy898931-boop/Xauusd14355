@@ -10,6 +10,7 @@ plain-language driver note, not as the number.
 
 from __future__ import annotations
 
+from .. import arabic as ar
 from .. import sources
 from .base import Agent, Study
 
@@ -40,6 +41,21 @@ def pearson(a: list[float], b: list[float]) -> float | None:
     if va <= 0 or vb <= 0:
         return None
     return cov / (va ** 0.5 * vb ** 0.5)
+
+
+def _n(v) -> str:
+    """A count, or a dash -- never the word "None"."""
+    return "—" if v is None else str(v)
+
+
+def _pct(v) -> str:
+    """A percent, or a dash -- never the word "None"."""
+    if v is None:
+        return "—"
+    try:
+        return f"{float(v):.2f}%"
+    except (TypeError, ValueError):
+        return str(v)
 
 
 class CorrelationAgent(Agent):
@@ -116,12 +132,16 @@ class CorrelationAgent(Agent):
 
         stance = self.stance_of(score)
         conf = 0.5 if driver_rho is None else min(1.0, 0.3 + driver_rho)
-        facts = (f"gold day {own_chg}%; measured 1h correlation with USDJPY "
-                 f"{round(usdjpy_rho, 3) if usdjpy_rho is not None else 'unmeasurable'}; "
-                 f"peers { {k: v.get('day_diff_pct') for k, v in peers.items()} }; "
-                 f"driver {macro}; breadth advancers {adv} / decliners {dec} ({tone})")
-        note = self.narrate(facts, "Summarise the cross-market context for gold.") or (
-            f"Cross-market read: {macro}; board is {tone}. {facts}")
+        peers_txt = "، ".join(
+            f"{k} {_pct(v.get('day_diff_pct'))}" for k, v in peers.items()) or "—"
+        facts = (f"الذهب اليوم {_pct(own_chg)}؛ ارتباط الساعة المقيس مع USDJPY "
+                 f"{round(usdjpy_rho, 3) if usdjpy_rho is not None else 'غير قابل للقياس'}؛ "
+                 f"الأقران {peers_txt}؛ "
+                 f"المحرّك {ar.t(macro, ar.DRIVER)}؛ الاتساع صاعد {_n(adv)} / "
+                 f"هابط {_n(dec)} ({ar.t(tone, ar.TONE)})")
+        note = self.narrate(facts, "لخّص سياق الأسواق المقابلة للذهب.") or (
+            f"قراءة الأسواق المقابلة: {ar.t(macro, ar.DRIVER)}؛ "
+            f"اللوح {ar.t(tone, ar.TONE)}. {facts}")
         return Study(self.name, self.kind, stance, conf, score, note,
                      {"peers": peers, "driver": macro, "breadth": breadth, "tone": tone,
                       "correlations": rhos})

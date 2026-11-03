@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import time
 
+from . import arabic as ar
 from . import sources
 from .agents.base import Study
 from .config import Settings
@@ -72,6 +73,13 @@ def _run_from_row(shared: SharedMemory, row: dict) -> Run:
 
 
 class Actions:
+    # Answers that build their own HTML escape their dynamic fields inline and
+    # must NOT be escaped as a block, or the chat prints `&lt;b&gt;`. The rest
+    # are plain text -- a study summary can contain `&` -- and are escaped as
+    # one block, because a raw `&` makes Telegram reject the whole message.
+    MARKUP_ACTIONS = ("recommend", "market", "plan", "levels", "help", "menu",
+                      "chart")
+
     def __init__(self, settings: Settings, orchestrator=None):
         self.settings = settings
         self.shared = SharedMemory(settings.shared_db)
@@ -89,9 +97,12 @@ class Actions:
                 "اختر من الأزرار 👇\n"
                 "\n"
                 "📊 تحليل الآن · 🎯 التوصية\n"
-                "📈 الخطة الكاملة · ⏱️ السوق\n"
-                "🔔 المستويات · 📚 دراسة الذهب\n"
-                "📋 آخر تقرير · 📈 معدل النجاح")
+                "📈 الخطة الكاملة · 📉 الشارت\n"
+                "⏱️ السوق · 🔔 المستويات\n"
+                "📚 دراسة الذهب · 📋 آخر تقرير\n"
+                "📈 معدل النجاح · ❓ مساعدة\n"
+                "\n"
+                "<i>كل ردّ معه زر «🔄 تحديث» و«🏠 القائمة».</i>")
 
     def run(self, action: str) -> str:
         handler = {
@@ -103,20 +114,16 @@ class Actions:
             "plan": self.plan,
             "levels": self.levels,
             "gold": self.gold,
+            "chart": self.chart,
             "help": self.help,
             "menu": self.menu_text,
         }.get(action)
         if handler is None:
             return f"⚠️ زر غير معروف: {_e(action)}"
         text = handler()
-        # Answers that carry their own markup (`recommend`, `market`, `plan`,
-        # `levels`, `help`, `menu`) escape their dynamic fields inline. The rest
-        # are plain text -- a study or an agent summary can contain `&` -- so
-        # they are escaped as one block. Escaping a markup-bearing answer would
-        # print `&lt;b&gt;`; not escaping a plain one can drop the whole message.
-        if action in ("analysis", "report", "hitrate", "gold"):
-            return escape(text)
-        return text
+        if action in self.MARKUP_ACTIONS:
+            return text
+        return escape(text)
 
     # ---- the long history file -----------------------------------------
     def _long_csv(self):
@@ -144,16 +151,19 @@ class Actions:
             "📊 <b>تحليل الآن</b> — تشغيل المكتب كامل (كل الوكلاء + النموذج) وتوصية\n"
             "🎯 <b>التوصية</b> — آخر قراءة محفوظة، فورية\n"
             "📈 <b>الخطة الكاملة</b> — شراء وبيع مشروط مع الوقف والأهداف\n"
+            "📉 <b>الشارت</b> — صورة السعر مقابل المستويات المراقَبة\n"
             "⏱️ <b>السوق</b> — السعر الحالي وعمر التسعيرة\n"
             "🔔 <b>المستويات</b> — المستويات المراقَبة وأيّها انكسر\n"
             "📚 <b>دراسة الذهب</b> — 10 سنين: شو صار لما كان الذهب بهالحالة\n"
             "📋 <b>آخر تقرير</b> — البطاقة الكاملة لكل وكيل\n"
             "📈 <b>معدل النجاح</b> — تقييم الصفقات السابقة\n"
             "\n"
-            "<b>أوامر سريعة:</b> /menu · /plan · /gold · /levels\n"
+            "<b>كل ردّ معه:</b> 🔄 تحديث (يعيد نفس الطلب) · 🏠 القائمة (يرجّعك للقائمة)\n"
             "\n"
-            "<i>ملاحظة: الرد بيوصل خلال ثوانٍ إذا في جلسة مراقبة شغّالة، وإلا "
-            "لحد 5 دقايق. المكتب صامت بشكل مقصود — ما بيبعت إلا لما يكون في شي.</i>")
+            "<b>أوامر سريعة:</b> /menu · /plan · /chart · /gold · /levels\n"
+            "\n"
+            "<i>الرد بيوصل خلال ثوانٍ إذا في جلسة مراقبة شغّالة، وإلا لحد 5 دقايق. "
+            "المكتب صامت بشكل مقصود — ما بيبعت إلا لما يكون في شي.</i>")
 
     def plan(self) -> str:
         """The two-sided conditional plan, from the shipped history."""
@@ -206,29 +216,33 @@ class Actions:
         return "\n".join(lines)
 
     def levels(self) -> str:
-        """The watched levels and which side is currently broken."""
-        from .levels import DEFAULT_LEVELS, triggered
+        """The watched levels, which side is broken, and which is about to be."""
+        from .levels import DEFAULT_LEVELS, approaching, triggered
 
         quote, err = self._quote_or_none()
         if not quote:
             return f"🔔 تعذّر قراءة السعر: {_e(err or 'لا توجد تسعيرة')}"
         live = float(quote["mid"])
         hits = triggered(live, DEFAULT_LEVELS)
+        near = {lv.price: d for lv, d in approaching(live, DEFAULT_LEVELS)}
         lines = [f"🔔 <b>المستويات المراقَبة</b> — {self.settings.symbol}",
                  f"السعر <b>{live:,.2f}</b>", ""]
         for lv in sorted(DEFAULT_LEVELS, key=lambda x: -x.price):
             hit = lv in hits
             arrow = "▲" if lv.side == "above" else "▼"
-            mark = "🔴" if hit else "⚪"
+            mark = "🔴" if hit else ("🟡" if lv.price in near else "⚪")
             lines.append(f"{mark} {arrow} <b>{lv.price:,.2f}</b> — {_e(lv.label)}")
             if hit:
                 lines.append(f"      <i>{_e(lv.note)}</i>")
+            elif lv.price in near:
+                lines.append(f"      <i>باقي {near[lv.price]:,.1f} نقطة — قريب</i>")
+        lines.append("")
         if hits:
-            lines.append("")
             lines.append(f"<b>{len(hits)} من {len(DEFAULT_LEVELS)} مستوى منكسر.</b>")
+        elif near:
+            lines.append(f"<i>{len(near)} مستوى قريب، ولسا ولا واحد منكسر.</i>")
         else:
-            lines.append("")
-            lines.append("<i>ولا مستوى منكسر — السعر بين المستويات.</i>")
+            lines.append("<i>ولا مستوى منكسر أو قريب — السعر بين المستويات.</i>")
         return "\n".join(lines)
 
     def gold(self) -> str:
@@ -291,7 +305,7 @@ class Actions:
         counts = self.shared.candle_counts(s.symbol)
         stale = "نعم" if quote.get("stale") else "لا"
         lines = [f"⏱️ <b>حالة السوق</b> — {s.symbol}",
-                 f"السعر {quote.get('mid')} · السوق {quote.get('market_state', '—')}",
+                 f"السعر {quote.get('mid')} · السوق {ar.market_state(quote.get('market_state'))}",
                  f"قديم؟ {stale} · عمر التسعيرة {_age(quote.get('quote_age_s'))} · "
                  f"تغيّر اليوم {quote.get('day_diff_pct', '—')}%"]
         if err:
@@ -305,6 +319,41 @@ class Actions:
         from .scoreboard import Grader
         board = Grader(self.shared).grade()
         return board.report()
+
+    # ---- the chart ------------------------------------------------------
+    def chart_png(self) -> tuple[bytes, str] | None:
+        """A price chart and its caption, or None when history is missing.
+
+        Plots the last ~120 closed daily bars against the watched levels, so the
+        picture and the `levels` action show the same lines. The forming bar is
+        dropped, like every other reader of the history.
+        """
+        csv = self._long_csv()
+        if csv is None:
+            return None
+        from .backtest import load_daily
+        from .chart import price_chart
+        from .levels import DEFAULT_LEVELS
+
+        bars = [b for b in load_daily(csv) if not b.get("isOpen")][-120:]
+        if len(bars) < 2:
+            return None
+        quote, _ = self._quote_or_none()
+        live = float(quote["mid"]) if quote else None
+        png = price_chart(bars, levels=DEFAULT_LEVELS, live=live)
+        head = f"📉 <b>{self.settings.symbol}</b> — آخر {len(bars)} يوم"
+        if live:
+            head += f" · السعر <b>{live:,.2f}</b>"
+        head += "\n<i>الخط الأصفر: الإغلاق. الأخضر: مستوى فوق. الأحمر: مستوى تحت.</i>"
+        return png, head
+
+    def chart(self) -> str:
+        """The chart as a text answer, for a caller that cannot send a photo."""
+        out = self.chart_png()
+        if out is None:
+            return "📉 لا يوجد تاريخ محفوظ للرسم."
+        _, caption = out
+        return caption
 
     # ---- the expensive one ---------------------------------------------
     def analysis(self) -> str:

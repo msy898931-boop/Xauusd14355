@@ -24,6 +24,7 @@ import datetime as dt
 import json
 from dataclasses import dataclass, field
 
+from . import arabic as ar
 from .config import NEUTRAL_BAND
 from .memory import SharedMemory
 
@@ -91,35 +92,35 @@ class Scoreboard:
         return (sum(self.r_multiples) / len(self.r_multiples)) if self.r_multiples else None
 
     def report(self) -> str:
-        lines = [f"Scoreboard — {self.runs_graded}/{self.runs_seen} runs graded", ""]
+        lines = [f"📈 معدل النجاح — قُيّم {self.runs_graded} من {self.runs_seen} قراءة", ""]
         if not self.runs_graded:
-            lines.append("No run has a horizon far enough in the past yet.")
-            lines.append("A horizon is graded only once a candle exists past it —")
-            lines.append("never against the current price.")
+            lines.append("ما في قراءة مرّ عليها أفق كافٍ بعد.")
+            lines.append("الأفق يُقيَّم فقط لما توجد شمعة بعده —")
+            lines.append("أبداً مقابل السعر الحالي.")
             return "\n".join(lines)
-        lines.append("Desk (implied bias, flat excluded):")
+        lines.append("المكتب (الميل الضمني، بلا الحالات المحايدة):")
         for label in HORIZONS:
             h = self.horizons.get(label)
             if not h or not h.graded:
                 continue
             lines.append(f"  +{label:<3} {h.correct}/{h.graded} = {h.hit_rate:5.1%}"
-                         f"   (skipped {h.skipped})")
+                         f"   (تُخطّي {h.skipped})")
         if self.plans_graded:
             tgt = self.plan_results.get("target", 0)
             stp = self.plan_results.get("stop", 0)
             exp = self.expectancy_r
             lines.append("")
-            lines.append("Plans (stop vs target, first touch wins):")
-            lines.append(f"  {tgt}/{self.plans_graded} reached the target"
+            lines.append("الخطط (الوقف مقابل الهدف، أول لمسة تفوز):")
+            lines.append(f"  {tgt}/{self.plans_graded} وصلوا الهدف"
                          f"   ({tgt / self.plans_graded:.0%})"
-                         + (f"   expectancy {exp:+.2f}R" if exp is not None else ""))
-            lines.append(f"  {stp} stopped out first   (skipped {self.plans_skipped})")
+                         + (f"   التوقّع {exp:+.2f}R" if exp is not None else ""))
+            lines.append(f"  {stp} ضُرب وقفهم أولاً   (تُخطّي {self.plans_skipped})")
         if self.agents:
             lines.append("")
-            lines.append("Per agent (the case for re-weighting):")
+            lines.append("حسب الوكيل (الأساس لإعادة الترجيح):")
             for a in sorted(self.agents, key=lambda x: (-(x.hit_rate or 0), -x.graded)):
                 if a.graded:
-                    lines.append(f"  {a.agent:>12} +{a.horizon:<3} "
+                    lines.append(f"  {ar.agent(a.agent)} +{a.horizon:<3} "
                                  f"{a.correct}/{a.graded} = {a.hit_rate:5.1%}")
         return "\n".join(lines)
 

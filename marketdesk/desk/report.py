@@ -7,10 +7,12 @@ when it says "no trade".
 
 from __future__ import annotations
 
+from . import arabic as ar
 from .orchestrator import Run
 
-VERDICT_AR = {"long": "شراء", "short": "بيع", "no-trade": "لا صفقة"}
-STANCE_AR = {"bull": "صاعد", "bear": "هابط", "neutral": "محايد"}
+# Kept as names for older callers and tests; both are the central tables now.
+VERDICT_AR = ar.VERDICT
+STANCE_AR = ar.STANCE
 
 
 def _n(v, nd=2, suffix=""):
@@ -28,9 +30,9 @@ def render(run: Run, lang: str = "ar") -> str:
     head = "قراءة السوق والتوصية" if lang == "ar" else "Market read & recommendation"
     L.append(f"=== {head} — {run.symbol} ===")
     q = (r.get("gather") or {}).get("quote") or {}
-    L.append(f"السعر {_n(q.get('mid'), 3)} · السوق {q.get('market_state', '—')} · "
-             f"عمر التسعيرة {q.get('quote_age_s', '—')}s · تغيّر اليوم {_n(q.get('day_diff_pct'), 2, '%')}")
-    L.append(f"المدة {run.duration_s:.1f}s · المعرّف {run.run_id}")
+    L.append(f"السعر {_n(q.get('mid'), 3)} · السوق {ar.market_state(q.get('market_state'))} · "
+             f"عمر التسعيرة {q.get('quote_age_s', '—')} ثانية · تغيّر اليوم {_n(q.get('day_diff_pct'), 2, '%')}")
+    L.append(f"المدة {run.duration_s:.1f} ثانية · المعرّف {run.run_id}")
     llm = r.get("llm") or {}
     if llm and not llm.get("available", True):
         L.append("⚠ النموذج غير متاح — النصوص أدناه حتمية، محسوبة لا مكتوبة.")
@@ -40,16 +42,15 @@ def render(run: Run, lang: str = "ar") -> str:
     L.append("")
     L.append("— دراسات الوكلاء —")
     for s in sorted(run.studies, key=lambda x: x.agent):
-        L.append(f"  [{s.agent:>11}] {STANCE_AR.get(s.stance, s.stance):<5} "
+        L.append(f"  [{ar.agent(s.agent)}] {ar.stance(s.stance)} "
                  f"ثقة {s.confidence:.2f} · نتيجة {s.score:+.2f}")
         L.append(f"               {s.summary}")
     L.append("")
     L.append("— التوصية النهائية —")
-    L.append(f"  الاتجاه: {VERDICT_AR.get(run.verdict, run.verdict)}  (نتيجة مرجّحة {run.score:+.2f})")
+    L.append(f"  الاتجاه: {ar.verdict(run.verdict)}  (نتيجة مرجّحة {run.score:+.2f})")
     bias = r.get("bias") or {}
     if bias.get("direction"):
-        bias_ar = {"up": "صاعد", "down": "هابط", "flat": "محايد"}.get(bias["direction"], bias["direction"])
-        L.append(f"  الميل الضمني: {bias_ar} ({bias.get('score'):+.3f})")
+        L.append(f"  الميل الضمني: {ar.direction(bias['direction'])} ({bias.get('score'):+.3f})")
     pfb = r.get("per_frame_bias") or {}
     if pfb:
         order = ["1d", "4h", "1h", "30m", "15m", "5m", "1m"]
@@ -58,8 +59,8 @@ def render(run: Run, lang: str = "ar") -> str:
     L.append(f"  مسموح بالتداول: {'نعم' if r.get('allowed') else 'لا'}")
     if r.get("entry") is not None:
         L.append(f"  الدخول {_n(r.get('entry'))} · الوقف {_n(r.get('stop'))} · "
-                 f"R:R {_n(r.get('rr'), 2)}")
-        tg = " · ".join(f"{_n(t['level'])} ({t['kind']})" for t in r.get("targets", []))
+                 f"المخاطرة/المكافأة {_n(r.get('rr'), 2)}")
+        tg = " · ".join(f"{_n(t['level'])} ({ar.kind(t['kind'])})" for t in r.get("targets", []))
         L.append(f"  الأهداف: {tg}")
     if r.get("levels_note"):
         L.append(f"  ملاحظة: {r['levels_note']}")

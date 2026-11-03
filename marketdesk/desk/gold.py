@@ -139,51 +139,51 @@ def run_gold_study(csv: Path, live: float | None = None, symbol: str = "XAUUSD",
     lo = min(b["l"] for b in w)
     pos = (px - lo) / (hi - lo) * 100 if hi > lo else 50.0
 
-    trend_name = "above" if cur[0] else "below"
+    trend_name = "فوق" if cur[0] else "تحت"
     rsi_name = ["<30", "30-45", "45-55", "55-70", ">70"][cur[1]]
-    rng_name = ["bottom", "middle", "top"][cur[2]]
+    rng_name = ["أسفل", "وسط", "أعلى"][cur[2]]
 
     L: list[str] = []
-    L.append("=" * 78)
-    L.append(f"{symbol} — 10-year study ({len(C)} daily bars, "
-             f"{C[0]['o'] and ''}{_d(C[0])} .. {_d(last)})")
-    L.append("=" * 78)
-    L.append("CURRENT STATE")
-    L.append(f"  live          {px:,.2f}")
-    L.append(f"  trend         {trend_name} the 50-day mean ({ma50:,.2f})")
-    L.append(f"  RSI(14)       {rsi:.1f}  -> bucket {rsi_name}")
-    L.append(f"  range pos     {pos:.0f}% up the 20-day range -> {rng_name}")
-    L.append(f"  ATR(1d)       {atr:,.2f}  ({atr / px * 100:.2f}% of price)")
+    L.append("=" * 60)
+    L.append(f"📚 {symbol} — دراسة 10 سنين ({len(C)} شمعة يومية، "
+             f"{_d(C[0])} .. {_d(last)})")
+    L.append("=" * 60)
+    L.append("الحالة الحالية")
+    L.append(f"  السعر الحالي    {px:,.2f}")
+    L.append(f"  الاتجاه         {trend_name} المتوسط 50 يوم ({ma50:,.2f})")
+    L.append(f"  RSI(14)         {rsi:.1f}  ← الفئة {rsi_name}")
+    L.append(f"  موقعه بالمدى    {pos:.0f}% من مدى 20 يوم ← {rng_name}")
+    L.append(f"  ATR(1d)         {atr:,.2f}  ({atr / px * 100:.2f}% من السعر)")
     L.append("")
-    L.append(f"HISTORICAL ANALOGUES — {len(ana)} days had this same state")
-    L.append(f"  base rate is measured on all {len(all_idx)} days")
+    L.append(f"نظائر تاريخية — {len(ana)} يوم مرّ بنفس الحالة")
+    L.append(f"  والمعدّل الأساسي مقيس على كل {len(all_idx)} يوم")
     L.append("")
-    L.append(f"  {'horizon':8} {'analogue n':>11} {'up%':>6} {'median%':>9} "
-             f"{'worst%':>8} {'best%':>8}   {'base up%':>9} {'base med%':>10}")
+    L.append(f"  {'الأفق':8} {'عدد النظائر':>11} {'صعود%':>7} {'وسيط%':>9} "
+             f"{'أسوأ%':>8} {'أفضل%':>8}   {'أساس صعود%':>10} {'أساس وسيط%':>11}")
     for h in HORIZONS:
         n, up, med, worst, best = _pct_stats(C, ana, h)
         bn, bup, bmed, _, _ = _pct_stats(C, all_idx, h)
-        L.append(f"  {h:>3}d      {n:>11} {up:>6.0%} {med:>+9.2f} "
+        L.append(f"  {h:>3}ي      {n:>11} {up:>6.0%} {med:>+9.2f} "
                  f"{worst:>+8.2f} {best:>+8.2f}   {bup:>9.0%} {bmed:>+10.2f}")
     L.append("")
-    L.append("  a 59% down-rate is not a signal on its own -- compare it to the")
-    L.append("  base rate beside it. the gap is the state's information.")
+    L.append("  نسبة هبوط 59% ليست إشارة بحد ذاتها — قارنها بالمعدّل الأساسي")
+    L.append("  جانبها. الفرق هو معلومة الحالة.")
     L.append("")
-    L.append("-" * 78)
-    L.append(f"THE TRADE UNDER CONSIDERATION — stop {stop_atr}xATR, "
-             f"target {tgt_atr}xATR  (R:R {tgt_atr / stop_atr:.2f})")
-    L.append("-" * 78)
-    L.append(f"  {'side':6} {'horizon':8} {'n':>6} {'hit%':>7} {'expectancy R':>14}")
-    for side, long in (("SHORT", False), ("LONG", True)):
+    L.append("-" * 60)
+    L.append(f"الصفقة قيد الدراسة — وقف {stop_atr} × ATR، "
+             f"هدف {tgt_atr} × ATR  (مخاطرة/مكافأة {tgt_atr / stop_atr:.2f})")
+    L.append("-" * 60)
+    L.append(f"  {'الجهة':6} {'الأفق':8} {'عدد':>6} {'إصابة%':>8} {'التوقّع R':>12}")
+    for side, long in (("بيع", False), ("شراء", True)):
         for h in HORIZONS:
             n, hit, exp_r = _bracket_stats(C, ana, long, stop_atr, tgt_atr, h)
             bn, bhit, bexp = _bracket_stats(C, all_idx, long, stop_atr, tgt_atr, h)
-            L.append(f"  {side:6} {h:>3}d      {n:>6} {hit:>7.1%} {exp_r:>+14.3f}"
-                     f"   (base {bexp:+.3f})")
+            L.append(f"  {side:6} {h:>3}ي      {n:>6} {hit:>7.1%} {exp_r:>+14.3f}"
+                     f"   (الأساس {bexp:+.3f})")
     L.append("")
-    L.append("  expectancy is in R: +0.2R means 0.2 times the risk, per trade, on")
-    L.append("  average. the base column is the same trade on every day, so the")
-    L.append("  difference is what the state adds. one sample, one market.")
+    L.append("  التوقّع بالـR: ‎+0.2R يعني 0.2 ضعف المخاطرة لكل صفقة بالمتوسط.")
+    L.append("  عمود الأساس هو نفس الصفقة على كل يوم، فالفرق هو ما تضيفه الحالة.")
+    L.append("  عيّنة واحدة، سوق واحد. مو وعد.")
     return "\n".join(L)
 
 

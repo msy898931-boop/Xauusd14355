@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 
+from .. import arabic as ar
 from .. import sources
 from .base import Agent, Study
 
@@ -151,13 +152,14 @@ class NewsAgent(Agent):
         conf = min(1.0, 0.3 + len(scored) / 40)
         stance = self.stance_of(norm)
         top = [s["title"] for s in scored[:5]]
-        facts = (f"{len(scored)} headlines, net {tally:+d}; most recent: {top}; "
-                 f"high-impact events within {self.settings.event_window_h:g}h: "
-                 f"{[s['name'] for s in soon] or 'none'}")
-        summary = self.narrate(facts, "Summarise the news flow and event risk.") or (
-            f"News tone is {stance} ({tally:+d} net over {len(scored)} headlines). "
-            f"Event risk in {self.settings.event_window_h:g}h: "
-            f"{[s['name'] for s in soon] or 'none'}.")
+        event_txt = ar.listing([ar.event_name(s.get("name")) for s in soon])
+        facts = (f"{len(scored)} عنواناً، الصافي {tally:+d}؛ الأحدث: {top}؛ "
+                 f"أحداث عالية التأثير خلال {self.settings.event_window_h:g} ساعة: "
+                 f"{event_txt}")
+        summary = self.narrate(facts, "لخّص تدفّق الأخبار وخطر الأحداث.") or (
+            f"نبرة الأخبار {ar.stance(stance)} (صافي {tally:+d} على {len(scored)} عنواناً). "
+            f"خطر الأحداث خلال {self.settings.event_window_h:g} ساعة: "
+            f"{event_txt}.")
         return Study(self.name, self.kind, stance, conf, norm, summary,
                      {"headlines": scored[:20], "net": tally,
                       "upcoming_events": upcoming[:10],

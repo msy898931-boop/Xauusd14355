@@ -54,10 +54,10 @@ class TelegramError(RuntimeError):
 # above the fold without scrolling.
 MENU: list[list[tuple[str, str]]] = [
     [("📊 تحليل الآن", "analysis"), ("🎯 التوصية", "recommend")],
-    [("📈 الخطة الكاملة", "plan"), ("⏱️ السوق", "market")],
-    [("🔔 المستويات", "levels"), ("📚 دراسة الذهب", "gold")],
-    [("📋 آخر تقرير", "report"), ("📈 معدل النجاح", "hitrate")],
-    [("❓ مساعدة", "help")],
+    [("📈 الخطة الكاملة", "plan"), ("📉 الشارت", "chart")],
+    [("⏱️ السوق", "market"), ("🔔 المستويات", "levels")],
+    [("📚 دراسة الذهب", "gold"), ("📋 آخر تقرير", "report")],
+    [("📈 معدل النجاح", "hitrate"), ("❓ مساعدة", "help")],
 ]
 
 # Plain text a person types, mapped to the same actions the buttons use. A
@@ -68,10 +68,11 @@ TEXT_ACTIONS: dict[str, str] = {
     "/start": "menu", "/menu": "menu", "/help": "help",
     "/analysis": "analysis", "/recommend": "recommend", "/report": "report",
     "/market": "market", "/hitrate": "hitrate", "/plan": "plan",
-    "/levels": "levels", "/gold": "gold",
+    "/levels": "levels", "/gold": "gold", "/chart": "chart",
     "تحليل": "analysis", "توصية": "recommend", "تقرير": "report",
     "سوق": "market", "نجاح": "hitrate", "خطة": "plan", "مستويات": "levels",
-    "ذهب": "gold", "قائمة": "menu", "مساعدة": "help", "رجوع": "menu",
+    "ذهب": "gold", "شارت": "chart", "رسم": "chart", "قائمة": "menu",
+    "مساعدة": "help", "رجوع": "menu",
 }
 
 
@@ -84,6 +85,23 @@ def action_for_text(text: str | None) -> str:
 def _keyboard() -> dict:
     return {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row]
                                 for row in MENU]}
+
+
+# Every answer carries a small nav row, so a reply is never a dead end: the
+# reader can refresh what they are looking at or go back to the menu without
+# hunting for a /command. `menu` itself gets the full menu instead, and the
+# refresh button is dropped there (it would refresh the menu onto the menu).
+def _nav_keyboard(action: str) -> dict:
+    rows: list[list[dict]] = []
+    if action not in ("menu", "help"):
+        rows.append([{"text": "🔄 تحديث", "callback_data": action}])
+    rows.append([{"text": "🏠 القائمة", "callback_data": "menu"}])
+    return {"inline_keyboard": rows}
+
+
+def keyboard_for(action: str) -> dict:
+    """The reply markup for `action`: the full menu, or the nav row."""
+    return _keyboard() if action in ("menu", "help") else _nav_keyboard(action)
 
 
 def _clip(text: str, limit: int = MAX_LEN) -> str:
@@ -115,19 +133,64 @@ class TelegramBot:
             return json.loads(r.read().decode())
 
     def send(self, text: str, *, chat_id: str | None = None,
-             keyboard: bool = False) -> bool:
+             keyboard: bool = False, markup: dict | None = None) -> bool:
         """One message. `text` is expected to be send-ready HTML: every action
         escapes the fields it interpolates, so escaping again here would print
-        `&amp;amp;`. The only texts this class escapes are its own errors."""
+        `&amp;amp;`. The only texts this class escapes are its own errors.
+
+        `markup` is a ready reply-markup, used for the nav row. `keyboard=True`
+        attaches the full menu and is kept for the menu action.
+        """
         target = chat_id or self.chat_id
         if not (self.token and target):
             return False
         payload = {"chat_id": target, "text": _clip(text), "parse_mode": "HTML",
                    "disable_web_page_preview": True}
-        if keyboard:
+        if markup is not None:
+            payload["reply_markup"] = markup
+        elif keyboard:
             payload["reply_markup"] = _keyboard()
         try:
             return bool(self._call("sendMessage", payload).get("ok"))
+        except (urllib.error.URLError, urllib.error.HTTPError, ValueError,
+                TimeoutError, KeyError):
+            return False
+
+    def send_photo(self, photo: bytes, caption: str = "", *,
+                   chat_id: str | None = None, markup: dict | None = None) -> bool:
+        """A photo with a caption, multipart-encoded.
+
+        The chart is drawn to a PNG in memory, so this is the only body the
+        client sends that is not JSON. `caption` is send-ready HTML, like
+        `send`, and is capped at Telegram's 1024-character caption limit.
+        """
+        target = chat_id or self.chat_id
+        if not (self.token and target and photo):
+            return False
+        boundary = "----deskchart"
+        parts: list[bytes] = []
+
+        def field(name: str, value: str) -> None:
+            parts.append(
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\""
+                f"\r\n\r\n{value}\r\n".encode())
+
+        field("chat_id", target)
+        field("caption", _clip(caption, 1000))
+        field("parse_mode", "HTML")
+        if markup is not None:
+            field("reply_markup", json.dumps(markup))
+        parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\";"
+            f" filename=\"chart.png\"\r\nContent-Type: image/png\r\n\r\n".encode())
+        parts.append(photo)
+        parts.append(f"\r\n--{boundary}--\r\n".encode())
+        req = urllib.request.Request(
+            f"{API}/bot{self.token}/sendPhoto", data=b"".join(parts),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        try:
+            with urllib.request.urlopen(req, timeout=40) as r:
+                return bool(json.loads(r.read().decode()).get("ok"))
         except (urllib.error.URLError, urllib.error.HTTPError, ValueError,
                 TimeoutError, KeyError):
             return False
@@ -188,6 +251,25 @@ class TelegramBot:
             return False
 
     # ---- the one pass --------------------------------------------------
+    def _send_chart(self, action: str, chat: str, markup: dict) -> bool:
+        """Send the chart first when the action draws one.
+
+        The photo goes before its text so the caption sits under the picture in
+        the chat. A chart that cannot be drawn is not an error -- the text reply
+        still goes -- so a missing history file leaves the chat working.
+        """
+        if action != "chart":
+            return False
+        try:
+            from .actions import Actions
+            out = Actions(self.settings).chart_png()
+        except Exception:  # noqa: BLE001 - a chart must never kill a reply
+            return False
+        if not out:
+            return False
+        png, caption = out
+        return self.send_photo(png, caption, chat_id=chat, markup=markup)
+
     def listen(self, orchestrator=None, *, seconds: int = 300,
                max_replies: int = 8, poll_s: int = 50) -> dict:
         """Stay connected and answer presses for `seconds`, not once.
@@ -311,9 +393,12 @@ class TelegramBot:
                 text = (f"<i>(تجاهلت {notice} رسالة أقدم — هذا ردّ على الأحدث)</i>"
                         f"\n\n{text}")
                 notice = 0
-            # The menu action gets the buttons attached, so they are
-            # discoverable without hunting for a /command.
-            self.send(text, chat_id=chat, keyboard=(action == "menu"))
+            # Every answer gets a nav row (or the full menu), so a reply is never
+            # a dead end. A chart is sent first when the action has one, so the
+            # picture sits above its caption.
+            markup = keyboard_for(action)
+            self._send_chart(action, chat, markup)
+            self.send(text, chat_id=chat, markup=markup)
             handled.append(action)
         # Confirm everything read, so the next pass starts after this batch.
         # A single scheduled run makes only one getUpdates call, and the Bot API
