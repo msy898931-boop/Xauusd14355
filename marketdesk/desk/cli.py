@@ -316,13 +316,27 @@ def cmd_daemon(args) -> int:
     reads on an interval but never the chat; `bot --listen` reads the chat for a
     few minutes but never reads the market. Here both run, plus a level check
     between readings, until stopped.
+
+    The cadences are read from the environment as well as the flags, so a
+    container can be tuned without editing the entrypoint. A flag wins.
     """
+    import os
+
     from .daemon import Daemon
 
+    def pick(flag: float | None, env: str, default: float) -> float:
+        if flag is not None:
+            return flag
+        try:
+            return float(os.environ.get(env, default))
+        except ValueError:
+            return default
+
     d = Daemon(_settings(args),
-               level_every=(args.level_every or 10.0),
-               read_every=(args.read_every or 900.0),
-               poll_wait_s=(args.poll_wait or 50.0))
+               level_every=pick(args.level_every, "DESK_LEVEL_EVERY", 10.0),
+               read_every=pick(args.read_every, "DESK_READ_EVERY", 900.0),
+               poll_wait_s=pick(args.poll_wait, "DESK_POLL_WAIT", 50.0),
+               web=args.web)
     d.install_signals()
     out = d.run_forever(seconds=args.seconds)
     print(json.dumps(out, ensure_ascii=False, default=str), flush=True)
@@ -528,6 +542,8 @@ def main(argv=None) -> int:
                     help="seconds one long poll waits on Telegram (default 50)")
     dm.add_argument("--seconds", type=float, default=None,
                     help="run for this long instead of forever (smoke test)")
+    dm.add_argument("--web", action="store_true",
+                    help="serve an inbound endpoint and let Telegram push updates")
     dm.set_defaults(func=cmd_daemon)
 
     ca = sub.add_parser("check-alerts", help="verify the alert pipeline end to end")

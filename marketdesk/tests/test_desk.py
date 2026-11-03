@@ -2906,3 +2906,256 @@ def test_daemon_a_dead_token_does_not_kill_the_process(tmp_path, monkeypatch):
     d._poll_buttons(5.0)                        # must not raise
     assert slept and slept[0] <= 5.0
     assert d.errors
+
+
+# ---- the webhook transport --------------------------------------------
+#
+# The webhook is the other way to reach the chat: Telegram PUSHES an update
+# instead of the desk polling. Two things must hold or it is worse than the
+# poll -- the answer must be IDENTICAL to the poll's (same chat check, same
+# action, same nav row), and a forged POST must be rejected before it reaches
+# an action.
+
+def _post(port, path, body, headers=None):
+    """POST to the local webhook and return (status, parsed body)."""
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}",
+                                 data=body, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status, json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read().decode())
+
+
+def _get(port, path):
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as r:
+            return r.status, json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read().decode())
+
+
+class _RecordingBot:
+    """A bot that records what it was asked to answer, never the network."""
+
+    def __init__(self):
+        self.seen: list[dict] = []
+        self.registered: list[tuple[str, str]] = []
+
+    def answer_webhook_update(self, update, orchestrator=None):
+        self.seen.append(update)
+        return {"ok": True, "handled": "market"}
+
+    def set_webhook(self, url, secret_token=""):
+        self.registered.append((url, secret_token))
+        return True
+
+
+def _webhook(tmp_path, monkeypatch, *, secret="s3cr3t", port=18099, bot=None):
+    from desk.webhook import WebhookServer
+
+    s = _settings(tmp_path)
+    s.telegram_token = "123456:FAKE"
+    s.telegram_chat_id = "933571066"
+    srv = WebhookServer(s, bot=bot or _RecordingBot(), secret_token=secret, port=port)
+    srv.start()
+    return srv
+
+
+def test_webhook_health_answers_so_a_free_host_does_not_sleep(tmp_path, monkeypatch):
+    """`/health` is the whole reason a free host stays awake: the ping is inbound
+    traffic, and a long poll (all outbound) would never be."""
+    srv = _webhook(tmp_path, monkeypatch)
+    try:
+        status, body = _get(srv.port, "/health")
+        assert status == 200 and body["ok"] is True
+    finally:
+        srv.stop()
+
+
+def test_webhook_rejects_a_forged_post_before_it_reaches_an_action(tmp_path, monkeypatch):
+    """A POST without the secret header must be refused, and the action must NOT
+    run. A forged request that reached an action could spend a model quota."""
+    bot = _RecordingBot()
+    srv = _webhook(tmp_path, monkeypatch, bot=bot)
+    try:
+        body = json.dumps({"update_id": 1}).encode()
+        status, _ = _post(srv.port, "/telegram", body,
+                          {"Content-Type": "application/json",
+                           "X-Telegram-Bot-Api-Secret-Token": "wrong"})
+        assert status == 403
+        assert bot.seen == []                  # never reached the bot
+    finally:
+        srv.stop()
+
+
+def test_webhook_answers_a_correctly_signed_update(tmp_path, monkeypatch):
+    bot = _RecordingBot()
+    srv = _webhook(tmp_path, monkeypatch, bot=bot)
+    try:
+        body = json.dumps({"update_id": 2}).encode()
+        status, out = _post(srv.port, "/telegram", body,
+                            {"Content-Type": "application/json",
+                             "X-Telegram-Bot-Api-Secret-Token": "s3cr3t"})
+        assert status == 200 and out["ok"] is True
+        assert [u["update_id"] for u in bot.seen] == [2]
+    finally:
+        srv.stop()
+
+
+def test_webhook_rejects_bad_json_and_oversize(tmp_path, monkeypatch):
+    srv = _webhook(tmp_path, monkeypatch)
+    try:
+        headers = {"Content-Type": "application/json",
+                   "X-Telegram-Bot-Api-Secret-Token": "s3cr3t"}
+        assert _post(srv.port, "/telegram", b"not json", headers)[0] == 400
+        assert _post(srv.port, "/telegram", b"[1,2,3]", headers)[0] == 400
+    finally:
+        srv.stop()
+
+
+def test_webhook_unknown_path_is_404(tmp_path, monkeypatch):
+    srv = _webhook(tmp_path, monkeypatch)
+    try:
+        assert _get(srv.port, "/nope")[0] == 404
+    finally:
+        srv.stop()
+
+
+def test_webhook_does_not_500_so_telegram_does_not_retry_storm(tmp_path, monkeypatch):
+    """A bad update must answer 200, not 5xx: a 5xx makes Telegram redeliver the
+    same update forever. The failure is reported in the body instead."""
+    class Boom(_RecordingBot):
+        def answer_webhook_update(self, update, orchestrator=None):
+            raise RuntimeError("action blew up")
+
+    srv = _webhook(tmp_path, monkeypatch, bot=Boom())
+    try:
+        status, out = _post(srv.port, "/telegram", json.dumps({"update_id": 3}).encode(),
+                            {"Content-Type": "application/json",
+                             "X-Telegram-Bot-Api-Secret-Token": "s3cr3t"})
+        assert status == 200 and out["ok"] is False
+    finally:
+        srv.stop()
+
+
+def test_webhook_answers_exactly_like_the_poll(tmp_path, monkeypatch):
+    """The two transports must take the SAME path. If the webhook answered
+    differently from a poll it would be a second, silently diverging client."""
+    from desk.bot import TelegramBot
+
+    bot, _ = _fake_bot(tmp_path, monkeypatch, updates=[])
+    monkeypatch.setattr(TelegramBot, "send", lambda self, text, **kw: True)
+    sent: list[str] = []
+    monkeypatch.setattr(TelegramBot, "_send_chart", lambda self, a, c, m: sent.append(a))
+
+    class FakeActions:
+        def __init__(self, *a, **k): pass
+        def run(self, action): return f"answer:{action}"
+
+    monkeypatch.setattr("desk.actions.Actions", FakeActions)
+    out = bot.answer_webhook_update(_press(9, "market"))
+    assert out["ok"] is True and out["handled"] == "market"
+    assert sent == ["market"]                  # the chart hook ran, same as a poll
+
+
+def test_webhook_update_from_another_chat_is_ignored(tmp_path, monkeypatch):
+    """The same quota guard the poll has: only the configured chat may spend."""
+    from desk.bot import TelegramBot
+
+    bot, _ = _fake_bot(tmp_path, monkeypatch, updates=[])
+    monkeypatch.setattr(TelegramBot, "send", lambda self, text, **kw: True)
+
+    class FakeActions:
+        def __init__(self, *a, **k): pass
+        def run(self, action): return "should not run"
+
+    monkeypatch.setattr("desk.actions.Actions", FakeActions)
+    out = bot.answer_webhook_update(_press(4, "market", chat="111"))
+    assert out["handled"] is None              # not ours to answer
+
+
+def test_daemon_web_mode_registers_the_webhook_and_skips_the_poll(tmp_path, monkeypatch):
+    """`--web` must serve the endpoint and point Telegram at it, and must NOT
+    also poll -- the two transports are mutually exclusive on Telegram's side."""
+    from desk.daemon import Daemon
+
+    bot = _RecordingBot()
+    monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://desk.example")
+    d = Daemon(_settings(tmp_path), bot=bot, web=True, level_every=10, read_every=900)
+    polled: list[int] = []
+    monkeypatch.setattr(d, "_poll_buttons", lambda wait: polled.append(1))
+    monkeypatch.setattr("desk.daemon.market_session", lambda now=None: _OpenSession())
+    out = d.run_forever(seconds=0.05)
+    assert d.webhook is not None
+    assert bot.registered == [("https://desk.example/telegram", "")]
+    assert polled == []                        # web mode never polls
+    assert out["ticks"] >= 1
+    d.webhook.stop()
+
+
+def test_daemon_cadences_can_come_from_the_environment(tmp_path, monkeypatch):
+    """A container is tuned by env, not by editing the entrypoint. `render.yaml`
+    sets DESK_LEVEL_EVERY=30 for the free 0.1-CPU instance; if the CLI ignored
+    it, the config would promise a cadence the process never used."""
+    import argparse
+
+    from desk.cli import cmd_daemon
+    from desk.daemon import Daemon
+
+    captured: dict = {}
+
+    class Cap(Daemon):
+        def __init__(self, *a, **k):
+            captured.update(k)
+            super().__init__(*a, **k)
+
+        def install_signals(self):
+            pass
+
+        def run_forever(self, **k):
+            return self.summary()
+
+    monkeypatch.setattr("desk.daemon.Daemon", Cap)
+    monkeypatch.setenv("DESK_LEVEL_EVERY", "30")
+    monkeypatch.setenv("DESK_READ_EVERY", "600")
+    ns = argparse.Namespace(symbol=None, level_every=None, read_every=None,
+                            poll_wait=None, seconds=None, web=False)
+    assert cmd_daemon(ns) == 0
+    assert captured["level_every"] == 30.0
+    assert captured["read_every"] == 600.0
+
+
+def test_a_flag_beats_the_environment(tmp_path, monkeypatch):
+    """An explicit flag must win over the env, or a manual run could not override
+    a container's tuned cadence."""
+    import argparse
+
+    from desk.cli import cmd_daemon
+    from desk.daemon import Daemon
+
+    captured: dict = {}
+
+    class Cap(Daemon):
+        def __init__(self, *a, **k):
+            captured.update(k)
+            super().__init__(*a, **k)
+
+        def install_signals(self):
+            pass
+
+        def run_forever(self, **k):
+            return self.summary()
+
+    monkeypatch.setattr("desk.daemon.Daemon", Cap)
+    monkeypatch.setenv("DESK_LEVEL_EVERY", "30")
+    ns = argparse.Namespace(symbol=None, level_every=5.0, read_every=None,
+                            poll_wait=None, seconds=None, web=False)
+    assert cmd_daemon(ns) == 0
+    assert captured["level_every"] == 5.0

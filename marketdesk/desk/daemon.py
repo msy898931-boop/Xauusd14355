@@ -31,17 +31,30 @@ A daemon that dies is worse than one that misses a tick, so every job is caught:
 a level check that fails does not stop the reading, and a rejected token does not
 kill the process -- it backs off and tries again. Each job reports its own
 failure, so a silent process can always be told from a broken one.
+
+TWO WAYS TO REACH THE CHAT
+The chat is either polled or pushed to, never both -- Telegram refuses
+`getUpdates` while a webhook is set. Polling needs no inbound address and works
+anywhere; the webhook answers a press the instant it happens AND is inbound
+traffic, which is what keeps a free host from sleeping. `--web` selects it, and
+the choice is deliberate rather than automatic: the two are different transports
+with different failure modes, and silently switching would hide the switch.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import signal
 import time
+from typing import TYPE_CHECKING
 
 from .config import Settings
 from .session import market_session
+
+if TYPE_CHECKING:                     # avoid importing the http stack at module load
+    from .webhook import WebhookServer
 
 # The level cadence: fine enough to catch a touch between two readings, coarse
 # enough not to hammer the quote source (one HTTP call per check).
@@ -67,11 +80,15 @@ class Daemon:
     def __init__(self, settings: Settings, *, level_every: float = DEFAULT_LEVEL_EVERY,
                  read_every: float = DEFAULT_READ_EVERY,
                  poll_wait_s: float = DEFAULT_POLL_WAIT,
-                 bot=None, orchestrator=None):
+                 bot=None, orchestrator=None, web: bool = False):
         self.settings = settings
         self.level_every = max(MIN_LOOP_S, float(level_every))
         self.read_every = max(self.level_every, float(read_every))
         self.poll_wait_s = max(MIN_LOOP_S, float(poll_wait_s))
+        # Webhook mode replaces the poll: the chat is pushed to, not read. The
+        # daemon still runs the market jobs on their cadences either way.
+        self.web = bool(web)
+        self.webhook: WebhookServer | None = None
         self._bot = bot
         self._orchestrator = orchestrator
         self._notifier = None
@@ -184,6 +201,33 @@ class Daemon:
         return out
 
     # ---- the loop --------------------------------------------------------
+    def _start_webhook(self) -> dict:
+        """Bring up the inbound endpoint and point Telegram at it.
+
+        The endpoint is started FIRST and the webhook is registered SECOND, so a
+        press cannot arrive at an address that is not listening yet. The public
+        base comes from `DESK_WEBHOOK_BASE` (or Render's `RENDER_EXTERNAL_URL`);
+        with neither, the endpoint still serves `/health` but Telegram is left
+        alone -- there is no address to point it at.
+        """
+        from .webhook import WEBHOOK_PATH, WebhookServer
+
+        base = (self.settings.webhook_base
+                or os.environ.get("RENDER_EXTERNAL_URL", "")).rstrip("/")
+        srv = WebhookServer(self.settings, bot=self.bot,
+                            orchestrator=self.orchestrator,
+                            port=self.settings.webhook_port,
+                            secret_token=self.settings.webhook_secret)
+        srv.start()
+        self.webhook = srv
+        out: dict = {"listening": srv.port, "base": base, "registered": False}
+        if base:
+            url = f"{base}{WEBHOOK_PATH}"
+            out["registered"] = self.bot.set_webhook(
+                url, secret_token=self.settings.webhook_secret)
+            out["url"] = url
+        return out
+
     def _poll_buttons(self, wait: float) -> None:
         """Answer the chat. A transport failure backs off rather than spinning;
         it must not end the process, because the process is meant to outlive it."""
@@ -242,8 +286,18 @@ class Daemon:
         started = time.monotonic()
         print(json.dumps({"state": "starting", "symbol": self.settings.symbol,
                           "level_every_s": self.level_every,
-                          "read_every_s": self.read_every}, ensure_ascii=False),
-              flush=True)
+                          "read_every_s": self.read_every,
+                          "transport": "webhook" if self.web else "poll"},
+                         ensure_ascii=False), flush=True)
+        if self.web:
+            # The chat is pushed to, so the loop's only job is the market. A
+            # failure to register is reported, not fatal: /health still answers,
+            # which is the thing that keeps a free host awake.
+            try:
+                print(json.dumps({"webhook": self._start_webhook()},
+                                 ensure_ascii=False), flush=True)
+            except Exception as exc:  # noqa: BLE001 - a busy port must not kill the desk
+                self._note_error("webhook", exc)
         while not self._stop:
             now = time.monotonic()
             if seconds is not None and now - started >= seconds:
@@ -251,11 +305,28 @@ class Daemon:
             out = self.tick(now)
             self.ticks += 1
             self._log(out)
-            wait = (self.poll_wait_s if out.get("closed")
-                    else min(self.poll_wait_s,
-                             max(MIN_LOOP_S, self._next_due_in(time.monotonic()))))
-            self._poll_buttons(wait)
+            if self.web:
+                # Nothing to poll: the endpoint answers in its own thread. Sleep
+                # to the next job, but never longer than a health-ping cadence so
+                # the process stays responsive to a stop.
+                wait = max(MIN_LOOP_S, min(self._next_due_in(time.monotonic()),
+                                           self.poll_wait_s))
+                self._sleep(wait)
+            else:
+                wait = (self.poll_wait_s if out.get("closed")
+                        else min(self.poll_wait_s,
+                                 max(MIN_LOOP_S, self._next_due_in(time.monotonic()))))
+                self._poll_buttons(wait)
+        if self.webhook is not None:
+            self.webhook.stop()
         return self.summary(uptime_s=round(time.monotonic() - started, 1))
+
+    def _sleep(self, seconds: float) -> None:
+        """Sleep in small steps so a stop signal is noticed promptly, not after a
+        full interval."""
+        end = time.monotonic() + max(0.0, seconds)
+        while not self._stop and time.monotonic() < end:
+            time.sleep(min(1.0, end - time.monotonic()))
 
     def summary(self, *, uptime_s: float | None = None) -> dict:
         return {"ticks": self.ticks,

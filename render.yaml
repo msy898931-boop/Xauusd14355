@@ -14,50 +14,60 @@
 # is lost on every restart, so a signal already sent could be re-sent. Mount a
 # Render Disk at /var/data (paid) or accept the reset deliberately.
 services:
-  # ---- the always-on desk (recommended) --------------------------------
-  # One resident process: the chat, the levels, and the readings. This is the
-  # shape that makes the desk feel live -- a press is answered in about a
-  # second, and a level touched between two readings is caught. It needs a paid
-  # instance type: Render's free tier covers web services and static sites, and
-  # a worker is neither.
-  - type: worker
+  # ---- the always-on desk (web service) --------------------------------
+  # One resident process: the chat, the levels, and the readings. The chat is
+  # served by an INBOUND endpoint, which is the point -- Telegram pushes a press
+  # (answered the instant it happens) and `/health` is inbound traffic, so a free
+  # instance is kept awake by a plain uptime ping. A long poll is entirely
+  # outbound and would never wake a sleeping host, so `--web` is what makes the
+  # free tier usable here at all.
+  #
+  # CAVEATS of the free instance (512 MB / 0.1 CPU, no disk):
+  #   * no persistent disk -> DESK_HOME is lost on every restart, so the alert
+  #     ledger forgets what it sent. Either accept a rare duplicate alert, or add
+  #     a disk on a paid plan.
+  #   * 0.1 CPU -> keep the level cadence coarse (30-60s), not the 10s default.
+  - type: web
     name: marketdesk-daemon
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    plan: starter            # free tier does not include workers
-    # A mounted disk is not optional here. Without it the container's DESK_HOME
-    # is lost on every restart, so the alert ledger forgets what it sent and the
-    # scoreboard forgets what it graded -- the desk would re-alert and lose its
-    # own record. Render disks require a paid plan and attach to one instance.
-    disk:
-      name: desk-data
-      mountPath: /data
-      sizeGB: 1
+    plan: free
+    healthCheckPath: /health
     envVars:
       - key: DESK_HOME
-        value: /data
+        value: /tmp/desk        # ephemeral on free; a paid disk mounts at /data
       - key: DESK_SYMBOL
         value: XAUUSD
+      - key: DESK_LEVEL_EVERY  # free 0.1 CPU cannot sustain the 10s default
+        value: "30"
+      - key: DESK_READ_EVERY
+        value: "900"
       - key: DESK_ALERT_SCORE
         value: "0.25"
       - key: DESK_MIN_RR
         value: "1.5"
       - key: DESK_EVENT_WINDOW_H
         value: "6"
-      # Secrets: set in the Render dashboard, never written to git.
+      # Secrets: set in the Render dashboard, never written to git. The webhook
+      # base is injected automatically as RENDER_EXTERNAL_URL, so the daemon
+      # registers itself with Telegram on boot -- no URL to paste.
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
       - key: GROQ_API_KEY
         sync: false
+      # A shared secret Telegram echoes back on every push; a forged POST is
+      # rejected before it reaches an action. Generate any random string.
+      - key: DESK_WEBHOOK_SECRET
+        sync: false
 
   # ---- the cron fallback (free) ----------------------------------------
   # One reading every 15 minutes and nothing else. No chat, no sub-15-minute
-  # level check. Kept so the desk can run without a paid instance, and as a
-  # second opinion if the worker is ever down. Do not run both against the same
-  # DESK_HOME: two processes would race the ledger and re-send alerts.
+  # level check. Kept as a belt-and-braces second opinion if the web service is
+  # ever down. Do NOT point it at the same DESK_HOME as the worker: two processes
+  # would race the ledger and re-send alerts.
   - type: cron
     name: marketdesk-watch
     runtime: python

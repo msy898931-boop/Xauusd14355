@@ -104,6 +104,23 @@ class Settings:
     # desk reads a dead tape on a Saturday and spends the run for nothing. Set
     # DESK_RESPECT_SESSION=0 to run the full desk on demand regardless.
     respect_session: bool = os.environ.get("DESK_RESPECT_SESSION", "1") != "0"
+    # ---- the inbound endpoint (webhook transport) ------------------------
+    # When set, the daemon serves an HTTP endpoint and Telegram PUSHES updates
+    # to it, instead of being polled. Two wins: a press is answered the moment it
+    # happens, and the endpoint is INBOUND traffic -- which is what stops a free
+    # host from sleeping (a long poll is entirely outbound and never would).
+    # The two transports are mutually exclusive on Telegram's side; switching to
+    # the webhook clears the poll backlog.
+    webhook_base: str = field(
+        default_factory=lambda: os.environ.get("DESK_WEBHOOK_BASE", ""))
+    # The port the endpoint binds. Most hosts inject PORT; DESK_PORT overrides.
+    webhook_port: int = field(default_factory=lambda: int(
+        os.environ.get("DESK_PORT") or os.environ.get("PORT") or "8080"))
+    # A shared secret Telegram echoes back in a header on every push, so a forged
+    # POST is rejected before it reaches an action. Empty -> the endpoint is
+    # open, which is only sane when nothing else can reach it.
+    webhook_secret: str = field(
+        default_factory=lambda: os.environ.get("DESK_WEBHOOK_SECRET", ""))
 
     @property
     def shared_db(self) -> Path:

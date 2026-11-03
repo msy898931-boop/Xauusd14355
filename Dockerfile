@@ -53,4 +53,11 @@ HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
 
 # `exec`-form entrypoint: signals (SIGTERM on stop) reach the daemon, so it can
 # finish the tick instead of being killed mid-write.
-ENTRYPOINT ["python", "-m", "desk.cli", "daemon"]
+#
+# `--web` serves an inbound endpoint: Telegram PUSHES updates (a press is
+# answered the instant it happens) and `/health` is inbound traffic, which is
+# what stops a free host from sleeping. Without it the desk long-polls, which is
+# entirely outbound and would never wake a sleeping host.
+ENV DESK_PORT=8080
+EXPOSE 8080
+ENTRYPOINT ["python", "-m", "desk.cli", "daemon", "--web"]

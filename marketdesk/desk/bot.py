@@ -254,6 +254,104 @@ class TelegramBot:
             return False
 
     # ---- the one pass --------------------------------------------------
+    def handle_update(self, update: dict, acts, *, notice: int = 0) -> str | None:
+        """Answer one update. Returns the action handled, or None when the update
+        was not ours to answer.
+
+        Extracted from `poll` so the long-poll pass and the webhook take the
+        EXACT same path. A webhook that answered differently from a poll would be
+        a second, silently diverging chat client -- and the divergence would only
+        show up in production, one update at a time.
+
+        `notice` is the count of older requests folded into this one (a backlog),
+        said once on the reply. The caller decides when to stop saying it.
+        """
+        cq = update.get("callback_query")
+        msg = update.get("message")
+        if cq is not None:
+            action = cq.get("data") or ""
+            chat = str(((cq.get("message") or {}).get("chat") or {}).get("id") or "")
+            callback_id = cq.get("id", "")
+        elif msg is not None:
+            # A typed message is a request too. Answering only button presses
+            # meant a chat of 18 plain messages got total silence.
+            action = action_for_text(msg.get("text"))
+            chat = str((msg.get("chat") or {}).get("id") or "")
+            callback_id = ""
+        else:
+            return None                      # nothing actionable in this update
+
+        # Only the configured chat may spend a model quota.
+        if self.chat_id and chat != self.chat_id:
+            if callback_id:
+                self.answer_callback(callback_id, "غير مسموح")
+            return None
+        if callback_id:
+            self.answer_callback(callback_id, "جارٍ التنفيذ…")
+        try:
+            text = acts.run(action)
+        except Exception as exc:  # noqa: BLE001 - a bad action must not kill the pass
+            text = escape(f"⚠️ تعذّر تنفيذ الطلب ({exc.__class__.__name__}).")
+        if notice:
+            # Said once, on the first reply of the pass, so a backlog is
+            # acknowledged rather than silently swallowed.
+            text = (f"<i>(تجاهلت {notice} رسالة أقدم — هذا ردّ على الأحدث)</i>"
+                    f"\n\n{text}")
+        # Every answer gets a nav row (or the full menu), so a reply is never a
+        # dead end. A chart is sent first when the action has one, so the picture
+        # sits above its caption.
+        markup = keyboard_for(action)
+        self._send_chart(action, chat, markup)
+        self.send(text, chat_id=chat, markup=markup)
+        return action
+
+    def answer_webhook_update(self, update: dict, orchestrator=None) -> dict:
+        """Answer one update Telegram pushed to the webhook.
+
+        There is no offset to confirm: the 200 response to the POST is itself the
+        acknowledgement. Everything else -- the chat check, the action, the nav
+        row, the chart -- is `handle_update`, shared with the poll path.
+        """
+        from .actions import Actions
+
+        if not self.available:
+            return {"ok": False, "reason": "not configured", "handled": None}
+        acts = Actions(self.settings, orchestrator=orchestrator)
+        action = self.handle_update(update, acts)
+        return {"ok": True, "handled": action}
+
+    def set_webhook(self, url: str, secret_token: str = "") -> bool:
+        """Point Telegram at `url` so it PUSHES updates instead of being polled.
+
+        `drop_pending_updates` is set because switching from a long poll leaves a
+        backlog that was already answered or is about to be re-answered; keeping
+        it would replay old presses on the new transport.
+        """
+        if not self.available:
+            return False
+        payload: dict = {"url": url, "drop_pending_updates": True,
+                         "allowed_updates": ["callback_query", "message"]}
+        if secret_token:
+            # Telegram echoes this back in a header on every request, so the
+            # endpoint can reject a forged POST even if the path leaks.
+            payload["secret_token"] = secret_token
+        try:
+            return bool(self._call("setWebhook", payload).get("ok"))
+        except (urllib.error.URLError, urllib.error.HTTPError, ValueError,
+                TimeoutError, KeyError):
+            return False
+
+    def delete_webhook(self) -> bool:
+        """Remove the webhook. Telegram refuses `getUpdates` while one is set --
+        the two transports are mutually exclusive -- so a poll must clear it."""
+        if not self.available:
+            return False
+        try:
+            return bool(self._call("deleteWebhook", {}).get("ok"))
+        except (urllib.error.URLError, urllib.error.HTTPError, ValueError,
+                TimeoutError, KeyError):
+            return False
+
     def _send_chart(self, action: str, chat: str, markup: dict) -> bool:
         """Send the chart first when the action draws one.
 
@@ -390,44 +488,12 @@ class TelegramBot:
             if i in folded:
                 continue                      # confirmed, folded into the newest
 
-            cq = u.get("callback_query")
-            msg = u.get("message")
-            if cq is not None:
-                action = cq.get("data") or ""
-                chat = str(((cq.get("message") or {}).get("chat") or {}).get("id") or "")
-                callback_id = cq.get("id", "")
-            elif msg is not None:
-                # A typed message is a request too. Answering only button
-                # presses meant a chat of 18 plain messages got total silence.
-                action = action_for_text(msg.get("text"))
-                chat = str((msg.get("chat") or {}).get("id") or "")
-                callback_id = ""
-            else:
-                continue                      # nothing actionable in this update
-
-            # Only the configured chat may spend a model quota.
-            if self.chat_id and chat != self.chat_id:
-                if callback_id:
-                    self.answer_callback(callback_id, "غير مسموح")
+            # The reply itself lives in `handle_update`, shared with the webhook
+            # transport, so the two can never answer the same press differently.
+            action = self.handle_update(u, acts, notice=notice)
+            if action is None:
                 continue
-            if callback_id:
-                self.answer_callback(callback_id, "جارٍ التنفيذ…")
-            try:
-                text = acts.run(action)
-            except Exception as exc:  # noqa: BLE001 - a bad action must not kill the pass
-                text = escape(f"⚠️ تعذّر تنفيذ الطلب ({exc.__class__.__name__}).")
-            if notice:
-                # Said once, on the first reply of the pass, so a backlog is
-                # acknowledged rather than silently swallowed.
-                text = (f"<i>(تجاهلت {notice} رسالة أقدم — هذا ردّ على الأحدث)</i>"
-                        f"\n\n{text}")
-                notice = 0
-            # Every answer gets a nav row (or the full menu), so a reply is never
-            # a dead end. A chart is sent first when the action has one, so the
-            # picture sits above its caption.
-            markup = keyboard_for(action)
-            self._send_chart(action, chat, markup)
-            self.send(text, chat_id=chat, markup=markup)
+            notice = 0                        # the backlog notice is said once
             handled.append(action)
         # Confirm everything read, so the next pass starts after this batch.
         # A single scheduled run makes only one getUpdates call, and the Bot API

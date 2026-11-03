@@ -49,6 +49,7 @@ an overrunning one is reported as timed-out, never as neutral.
 | `python3 -m desk.cli menu` | publish the button menu to the chat |
 | `python3 -m desk.cli serve --interval 15` | the watch loop, for a host with no cron |
 | `python3 -m desk.cli daemon` | **always-on**: chat + levels + readings in one process |
+| `python3 -m desk.cli daemon --web` | the same, but Telegram pushes (inbound `/health`) |
 | `python3 -m desk.cli agents` | the roster, with weights |
 | `python3 -m desk.cli memory` | what is in the shared store |
 
@@ -247,14 +248,48 @@ python3 -m desk.cli daemon --level-every 5 --read-every 900
 ```bash
 docker build -t marketdesk .
 docker run -d --name marketdesk --restart unless-stopped \
+  -p 8080:8080 \
   -e TELEGRAM_BOT_TOKEN=... -e TELEGRAM_CHAT_ID=... -e GROQ_API_KEY=... \
+  -e DESK_WEBHOOK_BASE=https://your-host.example \
+  -e DESK_WEBHOOK_SECRET=$(openssl rand -hex 16) \
   -v marketdesk-data:/data -e DESK_HOME=/data marketdesk
 ```
 
 **Mount a volume at `DESK_HOME`.** The alert ledger and the SQLite store live
 there; without one, every restart forgets which signals were already sent and
-re-sends them, and the scoreboard loses its own record. `render.yaml` declares
-both shapes — a worker (paid, recommended) and the 15-minute cron (free).
+re-sends them, and the scoreboard loses its own record.
+
+### Two ways to reach the chat
+
+Telegram refuses `getUpdates` while a webhook is set, so this is a mode, not an
+addition — the daemon runs one or the other, never both.
+
+| | poll (default) | webhook (`--web`) |
+|---|---|---|
+| how | the desk asks Telegram | Telegram pushes to the desk |
+| needs an address | no | yes (`DESK_WEBHOOK_BASE`) |
+| latency | one poll cycle | the moment it happens |
+| keeps a free host awake | **no** — all outbound | **yes** — `/health` is inbound |
+
+The last row is the one that matters for hosting. A free web host sleeps after
+~15 minutes without **inbound** traffic; a long poll is entirely outbound, so it
+would never wake the host — and the host sleeping would freeze the very loop
+doing the polling. An endpoint fixes both: Telegram's push is inbound, and so is
+a plain uptime ping to `/health`.
+
+```bash
+python3 -m desk.cli daemon --web            # serve the endpoint, push mode
+curl localhost:8080/health                  # the ping that keeps a free host up
+```
+
+A forged POST is rejected before it reaches an action: Telegram echoes a secret
+back in a header on every push, and the endpoint checks it in constant time.
+`/health` needs no secret — it is the liveness probe, and it must be cheap.
+
+`render.yaml` declares both shapes: a **free web service** running `--web` (kept
+awake by a health ping) and the 15-minute cron as a fallback. The free instance
+has no disk, so `DESK_HOME` is ephemeral — expect a rare duplicate alert, or add
+a disk on a paid plan.
 
 ## The roster (8 agents)
 
@@ -328,7 +363,8 @@ desk/
   agents/           base + the 8 specialists + the ROSTER
   orchestrator.py   the central manager (gather → dispatch → synthesise)
   daemon.py         the always-on process: chat + levels + readings
-  bot.py            the Telegram chat client (long poll)
+  bot.py            the Telegram chat client (long poll, or webhook)
+  webhook.py        the inbound endpoint: /health + the Telegram push route
   report.py         the card (Arabic by default)
   cli.py            run / gather / memory / agents / daemon
 ```
