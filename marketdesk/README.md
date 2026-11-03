@@ -316,3 +316,21 @@ significance is Bonferroni-corrected. And every family is split in and out of
 sample. A family that is significant *and* holds out of sample is worth building
 on; anything else is a regime or a fluke. The scan is evidence for what to build
 next, not a strategy.
+
+## Two-sided plan
+
+`desk plan` answers the question the orchestrator does not: where to act and
+where to get out. It prints a conditional long and a conditional short, each with
+a stop at 1.5xATR and a ladder of three targets at 1R / 2R / 3R, built from the
+one signal the scan found evidence for (a break of the prior 20-day range).
+
+```
+cd marketdesk && python3 -m desk.cli plan          # live quote + daily candles
+cd marketdesk && python3 -m desk.cli plan --offline # read the shipped CSV
+```
+
+Each side carries the sample evidence that supports it, and the two sides are
+labelled as they are found: in this data the long side is supported (n=47,
++0.915R, t=+4.80) and the short side is noise (n=16, t=-0.10). The plan also
+states that the trigger adds only +0.015R over always-long, so the long side's
+profit is the market's drift rather than a proven edge in the trigger.
