@@ -23,10 +23,20 @@ name: marketdesk-bot
 # would replay the same press. Telegram confirms an update only when a LATER
 # `getUpdates` passes a higher offset, so the pass ends by sending the offset
 # back; that makes the pass idempotent with nothing of ours to lose.
+#
+# HONEST LIMITS -- measured on this repository, 2026-11-03
+#   * GitHub's `schedule` is BEST-EFFORT, not a guarantee. It can be delayed, and
+#     queued runs can be dropped under load. On this repo a `*/5` cron produced
+#     only 2 scheduled runs in ~17 hours, while `workflow_dispatch` always worked.
+#     So a press is usually answered in about a second -- but the window is only
+#     200s out of every 5 minutes, and a dropped run widens that to ~5 minutes or
+#     more. Do not promise "instant".
+#   * The cron starts at :02, not :00. The top of the hour is the single most
+#     congested slot GitHub has; an odd offset is the only knob they give us.
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "2-59/5 * * * *"
   workflow_dispatch:
     inputs:
       publish_menu:

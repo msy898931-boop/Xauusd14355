@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-cov", "mypy", "ruff"]
+dev = ["pytest", "pytest-cov", "mypy", "ruff", "pyyaml"]
 
 [project.scripts]
 marketdesk = "desk.cli:main"

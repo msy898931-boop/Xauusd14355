@@ -20,10 +20,12 @@
 #     cron is every 5 minutes against a 15-minute sleep window -- three chances
 #     to land inside it, so a single late or skipped run does not let the service
 #     sleep.
-#   * The default URL assumes the Render service is named `marketdesk-daemon`.
-#     If Render appended a suffix (a name collision), set a repository variable
-#     `DESK_HEALTH_URL` under Settings -> Secrets and variables -> Actions ->
-#     Variables. No code change is needed.
+#   * The default URL is the service that actually exists. A blueprint deploy
+#     names it `marketdesk-daemon`, but the live service was created by hand as
+#     `marketdesk` -- and a wrong name answers 404, so the ping would warn
+#     forever without saying why. Set a repository variable `DESK_HEALTH_URL`
+#     under Settings -> Secrets and variables -> Actions -> Variables to point
+#     at whatever the dashboard actually calls it.
 #   * While the instance is asleep Render answers `/robots.txt` with disallow,
 #     but `/health` still wakes it -- a 200 here means the process is up, which
 #     is the only honest liveness answer for a desk that is silent by design.
@@ -31,8 +33,9 @@ name: marketdesk-keepawake
 
 on:
   schedule:
-    # Every 5 minutes. See the sleep window note above for why 5 and not 15.
-    - cron: "*/5 * * * *"
+    # Every 5 minutes, offset off the top of the hour: :00 is GitHub's most
+    # congested slot and the docs' only mitigation is to avoid it.
+    - cron: "3-59/5 * * * *"
   workflow_dispatch:
 
 permissions: {}
@@ -48,7 +51,7 @@ jobs:
     steps:
       - name: Ping the desk
         env:
-          HEALTH_URL: ${{ vars.DESK_HEALTH_URL || 'https://marketdesk-daemon.onrender.com/health' }}
+          HEALTH_URL: ${{ vars.DESK_HEALTH_URL || 'https://marketdesk.onrender.com/health' }}
         run: |
           # A cold start takes ~1 minute, so allow for it. A failure here is
           # expected while the service is first deploying, and must not fail the

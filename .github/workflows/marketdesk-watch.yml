@@ -25,8 +25,10 @@ on:
     # The spot market is shut from Friday's New York close until Sydney opens on
     # Sunday night, so a Saturday scan reads a frozen tape. The desk also stands
     # down on a closed market on its own (desk/session.py) -- this keeps the
-    # schedule from even waking a runner. GitHub cron is UTC and best-effort.
-    - cron: "*/15 * * * 0-5"
+    # schedule from even waking a runner. GitHub cron is UTC and best-effort:
+    # runs can be delayed or dropped, so the offset (:07, :22, :37, :52) avoids
+    # the top of the hour, GitHub's most congested slot.
+    - cron: "7-59/15 * * * 0-5"
   # Manual trigger, for testing the pipeline end to end.
   workflow_dispatch:
     inputs:

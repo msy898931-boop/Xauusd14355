@@ -3229,7 +3229,12 @@ def test_render_blueprint_stays_inside_the_free_hour_budget():
 def test_the_keepawake_workflow_pings_health_within_the_sleep_window():
     """A free Render service sleeps after 15 idle minutes, so the ping cadence
     must be well inside that -- and it must be a plain `/health` GET, because
-    that is the endpoint that answers without a secret."""
+    that is the endpoint that answers without a secret.
+
+    The cron is written as a range (`3-59/5`) rather than `*/5` to dodge the top
+    of the hour, GitHub's most congested slot -- so parse the step, do not assume
+    the `*/N` shape.
+    """
     from pathlib import Path
 
     import yaml
@@ -3238,12 +3243,37 @@ def test_the_keepawake_workflow_pings_health_within_the_sleep_window():
     path = root / ".github" / "workflows" / "marketdesk-keepawake.yml"
     doc = yaml.safe_load(path.read_text())
     cron = doc[True]["schedule"][0]["cron"]          # `on:` parses as True
-    # "*/5 * * * *" -> every 5 minutes, three chances inside a 15-minute window.
-    assert cron.startswith("*/"), f"unexpected cadence {cron!r}"
-    minutes = int(cron.split()[0].lstrip("*/"))
-    assert minutes <= 15, "a cadence wider than the sleep window lets it sleep"
-    step = doc["jobs"]["ping"]["steps"][0]
-    assert "/health" in str(step.get("env", {})) + str(step.get("run", ""))
+    minute = cron.split()[0]
+    assert "/" in minute, f"unexpected cadence {cron!r}"
+    step = int(minute.split("/")[1])
+    assert step <= 15, "a cadence wider than the sleep window lets it sleep"
+    # An offset off :00: GitHub drops or delays the top of the hour most.
+    assert not minute.startswith("*/"), "start at an offset, not :00"
+    step_expr = doc["jobs"]["ping"]["steps"][0]
+    assert "/health" in str(step_expr.get("env", {})) + str(step_expr.get("run", ""))
+
+
+def test_the_bot_cron_leaves_headroom_and_avoids_the_top_of_the_hour():
+    """The bot's listen window must fit inside its own cron gap, and the cron
+    must not start at :00. A 200s listen plus ~45s of setup must end before the
+    next trigger, or `concurrency` drops the run behind it -- measured on this
+    repo: a `*/5` cron at :00 produced only 2 scheduled runs in ~17 hours."""
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    doc = yaml.safe_load((root / ".github" / "workflows" / "marketdesk-bot.yml").read_text())
+    cron = doc[True]["schedule"][0]["cron"]
+    minute = cron.split()[0]
+    assert not minute.startswith("*/"), "start at an offset, not :00"
+    step = int(minute.split("/")[1])
+    assert step >= 5, "GitHub's shortest supported interval is 5 minutes"
+
+    inputs = doc[True]["workflow_dispatch"]["inputs"]
+    listen = inputs["listen_seconds"]["default"]
+    assert listen + 45 < step * 60, (
+        f"a {listen}s listen plus setup must end inside the {step}-minute gap")
 
 
 def test_daemon_cadences_can_come_from_the_environment(tmp_path, monkeypatch):
