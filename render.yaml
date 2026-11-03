@@ -33,8 +33,14 @@
 services:
   # ---- the always-on desk (web service) --------------------------------
   # One resident process: the chat, the levels, and the readings.
+  #
+  # THE NAME IS THE LIVE ONE, ON PURPOSE. The service was created by hand, so
+  # Render named it `Xauusd14355-4`, not the `marketdesk-daemon` this file used to
+  # say. If the two disagree, syncing this blueprint would create a SECOND service
+  # -- which is exactly the 750-hour breach the header warns about. A blueprint
+  # name is not decoration; it is what the deploy creates.
   - type: web
-    name: marketdesk-daemon
+    name: Xauusd14355-4
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
