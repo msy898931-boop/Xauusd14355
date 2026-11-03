@@ -2588,6 +2588,47 @@ def test_scenarios_report_the_next_high_impact_event_only():
     assert 3.9 < sc["event"]["hours"] < 4.1
 
 
+def test_a_scenario_event_must_concern_the_instruments_currency():
+    """A nearer event in the WRONG currency must not win.
+
+    Gold is quoted in dollars, so New Zealand employment cannot move it. The
+    nearest high-impact row used to win whatever it concerned, and the scenario
+    block told a gold trader about NZD employment while the USD releases went
+    unmentioned."""
+    import datetime as dt
+
+    from desk import scenarios as S
+
+    now = dt.datetime(2026, 11, 3, 12, 0, tzinfo=dt.UTC)
+    cal = [
+        {"time": "2026-11-03T13:00:00Z", "currency": "NZD",
+         "name": "Employment Change q/q", "importance": "high",
+         "forecast": 0.4, "previous": 0.5},
+        {"time": "2026-11-03T16:00:00Z", "currency": "USD",
+         "name": "ADP Nonfarm Employment Change", "importance": "high",
+         "forecast": 64.0, "previous": 90.0},
+    ]
+    sc = S.build({"1h": _wave_frame()}, 3960.0, calendar=cal, now=now,
+                 window_h=6.0, symbol="XAUUSD")
+    assert sc["event"] is not None
+    assert sc["event"]["currency"] == "USD", "the NZD row is nearer but cannot move gold"
+    assert sc["event"]["hours"] > 3.5
+
+
+def test_a_lone_wrong_currency_event_is_not_reported_at_all():
+    """No USD event in the window means no event line -- not the nearest row."""
+    import datetime as dt
+
+    from desk import scenarios as S
+
+    now = dt.datetime(2026, 11, 3, 12, 0, tzinfo=dt.UTC)
+    cal = [{"time": "2026-11-03T13:00:00Z", "currency": "NZD", "name": "RBNZ Thing",
+            "importance": "high", "forecast": None, "previous": None}]
+    sc = S.build({"1h": _wave_frame()}, 3960.0, calendar=cal, now=now,
+                 window_h=6.0, symbol="XAUUSD")
+    assert sc["event"] is None
+
+
 def test_scenarios_say_so_when_there_is_nothing_to_build_on():
     """No printed levels is stated, not filled with an invented price."""
     from desk import scenarios as S

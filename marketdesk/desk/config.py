@@ -25,6 +25,21 @@ TIMEFRAMES = ("1d", "4h", "1h", "30m", "15m", "5m", "1m")
 # and the orchestrator's verdict can never disagree about what "neutral" means.
 NEUTRAL_BAND = float(os.environ.get("DESK_NEUTRAL_BAND", "0.15"))
 
+# The currency whose high-impact events move each instrument. Gold and silver
+# are quoted in dollars; the FX majors are read off their first leg. Shared, not
+# owned by an agent: the risk gate decides whether to stand down and the scenario
+# builder decides which event to name, and when those two disagreed the scenarios
+# told a gold trader about New Zealand employment.
+CURRENCY = {
+    "XAUUSD": "USD", "XAGUSD": "USD", "BTCUSD": "USD", "USOIL": "USD",
+    "EURUSD": "EUR", "GBPUSD": "GBP", "USDJPY": "USD", "AUDUSD": "AUD",
+}
+
+
+def base_currency(symbol: str) -> str:
+    """The currency an event must concern to matter to `symbol`."""
+    return CURRENCY.get(symbol.upper(), symbol.upper()[:3])
+
 # The model chain, best-first. Groq meters a separate daily token quota per
 # model, so listing several turns one model's spent quota into a rotation rather
 # than a silent fall back to computed prose. All four answered a 25-headline

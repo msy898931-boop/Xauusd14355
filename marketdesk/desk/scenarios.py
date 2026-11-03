@@ -17,6 +17,7 @@ import datetime as dt
 
 from . import arabic as ar
 from . import indicators as ind
+from .config import base_currency
 
 # A level's stop is the ATR of the frame that printed it: a 1h shelf plays out
 # over hours, so a daily-ATR stop would be several times too wide. Frames are
@@ -98,15 +99,22 @@ def _candidates(bars_by_frame: dict[str, list[dict]], live: float) -> list[dict]
     return kept
 
 
-def _next_event(cal: list[dict], now: dt.datetime, window_h: float) -> dict | None:
-    """The nearest high-impact event inside `window_h`, or None.
+def _next_event(cal: list[dict], now: dt.datetime, window_h: float,
+                symbol: str = "XAUUSD") -> dict | None:
+    """The nearest high-impact event inside `window_h` that can move `symbol`.
 
-    `actual` is null until a release is published — never read as a number, and
-    never treated as "no event".
+    The currency filter is not cosmetic. Without it the nearest high-impact row
+    wins whatever it concerns, and the scenario block told a gold trader about
+    New Zealand employment -- an event that cannot move gold -- while the USD
+    releases that day went unmentioned. The risk gate already filtered this way;
+    the scenarios had not been taught the same rule.
     """
+    want = base_currency(symbol)
     best = None
     for e in cal or []:
         if e.get("importance") != "high":
+            continue
+        if e.get("currency") and e["currency"] != want:
             continue
         try:
             when = dt.datetime.fromisoformat(str(e["time"]).replace("Z", "+00:00"))
@@ -182,7 +190,7 @@ def build(bars_by_frame: dict[str, list[dict]], live: float,
             "deeper", "short", below[1], below[2] if len(below) > 2 else None,
             "كسر الدعم الثاني يفتح الطريق للمستوى الأبعد"))
 
-    ev = _next_event(calendar or [], now, window_h)
+    ev = _next_event(calendar or [], now, window_h, symbol)
     if ev:
         row = ev["row"]
         out["event"] = {

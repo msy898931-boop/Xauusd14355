@@ -10,19 +10,8 @@ from __future__ import annotations
 
 from .. import arabic as ar
 from .. import indicators as ind
+from ..config import base_currency as _base_currency
 from .base import Agent, Study
-
-# The currency whose high-impact events move each instrument. Gold and silver
-# are quoted in dollars; the FX majors are read off their first leg.
-_CURRENCY = {
-    "XAUUSD": "USD", "XAGUSD": "USD", "BTCUSD": "USD", "USOIL": "USD",
-    "EURUSD": "EUR", "GBPUSD": "GBP", "USDJPY": "USD", "AUDUSD": "AUD",
-}
-
-
-def _base_currency(symbol: str) -> str:
-    """The currency an event must concern to close the gate for `symbol`."""
-    return _CURRENCY.get(symbol.upper(), symbol.upper()[:3])
 
 
 class RiskAgent(Agent):
