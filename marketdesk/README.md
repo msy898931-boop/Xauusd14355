@@ -372,3 +372,35 @@ never a rule.
 
 This is why the desk's recommendation is honest about being a reading, not a
 proven edge.
+
+## The 10-year gold study
+
+`desk gold` is the gold-only answer, on ten years of daily bars instead of the
+desk's ~500. It describes the current state -- trend versus the 50-day mean, the
+RSI bucket, where price sits in its 20-day range -- then finds every historical
+day in the same state and reports what the next 5 and 10 days actually did.
+
+```
+cd marketdesk && python3 -m desk.cli gold --csv ../longdata/XAUUSD_1d.csv
+```
+
+Every bucket is printed with its `n` and beside the base rate, because a 59%
+up-rate means nothing without knowing the unconditional rate. The last section
+grades the trade under consideration -- entry, stop and target in ATR units --
+first-touch and stop-first, on every historical day in the same state, so the
+answer is an **expectancy in R** rather than a feeling.
+
+For the state of 2026-11-03 (below the 50-day mean, RSI 36, bottom of the 20-day
+range), 389 of 2452 days matched:
+
+| side | horizon | n | hit% | expectancy R | base R |
+|---|---|---|---|---|---|
+| SHORT | 10d | 389 | 28.0% | **-0.194** | -0.108 |
+| LONG | 10d | 389 | 36.5% | **+0.049** | +0.062 |
+
+**Neither side has an edge in this state.** The short side is *worse* than the
+unconditional base rate, and the long side is slightly worse too. That is the
+honest reading: this state carries no information about the next ten days.
+
+The forming bar is excluded here too -- the last bar of a live chart is the day
+still moving, and `longdata` marks it `isOpen` rather than calling it closed.
