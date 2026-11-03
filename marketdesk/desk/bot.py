@@ -211,6 +211,15 @@ class TelegramBot:
         try:
             body = self._call("getUpdates", payload, timeout=timeout + 20)
         except urllib.error.HTTPError as e:
+            if e.code == 409:
+                # Telegram serves updates to a webhook OR to getUpdates, never
+                # both. A 409 means a webhook is registered -- so polling here is
+                # not a bug to retry, it is the wrong transport. Naming the cause
+                # matters: the bare "HTTP 409" reads as a broken token.
+                raise TelegramError(
+                    "getUpdates HTTP 409 - a webhook is registered, so Telegram "
+                    "will not serve getUpdates. Use the webhook transport, or "
+                    "delete_webhook() first.") from e
             raise TelegramError(f"getUpdates HTTP {e.code}") from e
         except (urllib.error.URLError, TimeoutError) as e:
             raise TelegramError(f"getUpdates unreachable ({type(e).__name__})") from e
@@ -219,6 +228,21 @@ class TelegramBot:
         if not body.get("ok", True):
             raise TelegramError(f"getUpdates rejected: {body.get('description')}")
         return body.get("result") or []
+
+    def webhook_info(self) -> dict:
+        """What Telegram currently believes about this bot's transport.
+
+        The only honest way to ask 'is a webhook registered, and is it healthy?'.
+        Telegram reports the URL, whether the last delivery failed, and the error
+        it hit -- so a stale URL or a rejected secret is visible rather than
+        guessed at. Returns `{}` when the token is unusable, which is itself the
+        answer: nothing is registered against a token that cannot be read."""
+        try:
+            body = self._call("getWebhookInfo", {})
+        except (urllib.error.URLError, urllib.error.HTTPError, ValueError,
+                TimeoutError, KeyError):
+            return {}
+        return body.get("result") or {}
 
     def confirm(self, offset: int) -> bool:
         """Tell Telegram that everything below `offset` is delivered.

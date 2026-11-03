@@ -1352,6 +1352,79 @@ def test_bot_reports_a_transport_failure_not_an_empty_pass(tmp_path, monkeypatch
     assert "404" in out["reason"]
 
 
+def test_a_webhook_409_says_what_it_means(tmp_path, monkeypatch):
+    """A registered webhook makes every poll fail with a bare `HTTP 409`, which
+    reads like a broken token. It is not: Telegram serves updates to a webhook OR
+    to getUpdates, never both. The message must name the transport conflict, or
+    the operator debugs the token for an hour. Measured live: the Render daemon
+    registers a webhook, so the Actions poll failed exactly this way."""
+    import urllib.error
+
+    from desk.bot import TelegramBot, TelegramError
+
+    s = _settings(tmp_path)
+    s.telegram_token = "123456:LIVE"
+    s.telegram_chat_id = "933571066"
+
+    def conflict(self, method, payload, timeout=20):
+        raise urllib.error.HTTPError(method, 409, "Conflict", {}, None)
+
+    monkeypatch.setattr(TelegramBot, "_call", conflict)
+    bot = TelegramBot(s)
+    try:
+        bot.get_updates()
+        raise AssertionError("a 409 must raise")
+    except TelegramError as e:
+        assert "409" in str(e)
+        assert "webhook" in str(e).lower()
+
+
+def test_telegram_command_reports_the_transport(tmp_path, monkeypatch, capsys):
+    """`desk telegram` is the one honest answer to 'why does the bot not answer?'.
+    With a webhook registered it exits 0 and names the URL; with none it exits 1,
+    because then a poller can work but a sleeping host cannot be woken by a press."""
+    import json
+
+    from desk import cli
+    from desk.bot import TelegramBot
+
+    s = _settings(tmp_path)
+    s.telegram_token = "123456:LIVE"
+    s.telegram_chat_id = "933571066"
+    monkeypatch.setattr(cli, "_settings", lambda a: s)
+
+    monkeypatch.setattr(TelegramBot, "webhook_info",
+                        lambda self: {"url": "https://xauusd14355-4.onrender.com/telegram",
+                                      "pending_update_count": 0})
+    assert cli.cmd_telegram(None) == 0
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["transport"] == "webhook"
+    assert "onrender.com" in out["url"]
+
+    monkeypatch.setattr(TelegramBot, "webhook_info", lambda self: {"url": ""})
+    assert cli.cmd_telegram(None) == 1
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["transport"] == "poll" and out["url"] is None
+
+
+def test_a_stale_webhook_is_reported_not_swallowed(tmp_path, monkeypatch, capsys):
+    """Telegram records why the last delivery failed. Printing that is the whole
+    point of the probe: a stale URL or a rejected secret must be visible."""
+    from desk import cli
+    from desk.bot import TelegramBot
+
+    s = _settings(tmp_path)
+    s.telegram_token = "123456:LIVE"
+    s.telegram_chat_id = "933571066"
+    monkeypatch.setattr(cli, "_settings", lambda a: s)
+    monkeypatch.setattr(TelegramBot, "webhook_info",
+                        lambda self: {"url": "https://old.example/telegram",
+                                      "last_error_message": "Wrong response from the webhook: 403 Forbidden"})
+    cli.cmd_telegram(None)
+    out = capsys.readouterr().out
+    assert "403" in out and "stale" in out.lower()
+
+
 def test_bot_cli_exits_nonzero_when_the_pass_fails(tmp_path, monkeypatch):
     """The workflow reads the exit code; a failed pass must not be green."""
     import urllib.error
@@ -3250,7 +3323,11 @@ def test_the_keepawake_workflow_pings_health_within_the_sleep_window():
     # An offset off :00: GitHub drops or delays the top of the hour most.
     assert not minute.startswith("*/"), "start at an offset, not :00"
     step_expr = doc["jobs"]["ping"]["steps"][0]
-    assert "/health" in str(step_expr.get("env", {})) + str(step_expr.get("run", ""))
+    blob = str(step_expr.get("env", {})) + str(step_expr.get("run", ""))
+    assert "/health" in blob
+    # The default must name the service that actually exists. Getting this wrong
+    # is a silent 404 loop -- the ping warns forever without saying why.
+    assert "xauusd14355-4.onrender.com" in blob or "DESK_HEALTH_URL" in blob
 
 
 def test_the_bot_cron_leaves_headroom_and_avoids_the_top_of_the_hour():

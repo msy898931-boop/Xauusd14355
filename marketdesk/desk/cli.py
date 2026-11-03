@@ -438,6 +438,46 @@ def cmd_menu(args) -> int:
     return 0 if ok else 1
 
 
+def cmd_telegram(args) -> int:
+    """Report which transport Telegram is actually serving this bot on.
+
+    This is the question every "why does the bot not answer?" investigation
+    starts with, and it has exactly one honest answer: `getWebhookInfo`. Telegram
+    serves updates to a webhook OR to getUpdates, never both -- so a webhook left
+    registered silently starves a poll, and the poller sees only a bare 409.
+
+    Exit code 0 means a webhook is registered (push transport, as the daemon
+    wants); 1 means none is (so a poller can work, but a sleeping host cannot be
+    woken by a press). Printing it rather than asserting it keeps the command
+    usable in both worlds.
+    """
+    import json
+
+    from .bot import TelegramBot
+
+    s = _settings(args)
+    bot = TelegramBot(s)
+    if not bot.available:
+        print("result: NOT CONFIGURED — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+        return 2
+    info = bot.webhook_info()
+    if not info:
+        print("result: UNREADABLE — the token is rejected or the API is unreachable")
+        return 2
+    url = info.get("url") or ""
+    out = {
+        "url": url or None,
+        "pending_updates": info.get("pending_update_count", 0),
+        "last_error": info.get("last_error_message") or None,
+        "transport": "webhook" if url else "poll",
+    }
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    if url and info.get("last_error_message"):
+        print(f"\n⚠ Telegram could not deliver to {url}: "
+              f"{info['last_error_message']} — the URL or the secret is stale.")
+    return 0 if url else 1
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="desk", description="MarketDesk multi-agent analysis")
     p.add_argument("--symbol", default=None, help="instrument (default XAUUSD)")
@@ -571,6 +611,10 @@ def main(argv=None) -> int:
     mn = sub.add_parser("menu", help="publish the button menu to the chat")
     mn.add_argument("--symbol", default=None)
     mn.set_defaults(func=cmd_menu)
+
+    tg = sub.add_parser(
+        "telegram", help="ask Telegram what transport this bot actually uses")
+    tg.set_defaults(func=cmd_telegram)
 
     args = p.parse_args(argv)
     return args.func(args)
