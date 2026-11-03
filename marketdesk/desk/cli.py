@@ -28,12 +28,19 @@ def _settings(args) -> Settings:
 def cmd_run(args) -> int:
     desk = Orchestrator(_settings(args))
     run = desk.run()
-    print(render(run, lang=args.lang))
+    text = render(run, lang=args.lang)
+    print(text)
     if args.json:
         print(json.dumps({"run_id": run.run_id, "verdict": run.verdict,
                           "score": run.score, "recommendation": run.recommendation,
                           "studies": [s.to_dict() for s in run.studies]},
                          ensure_ascii=False, indent=2))
+    if getattr(args, "send", False):
+        from .notify import Notifier
+
+        ok = Notifier(_settings(args)).send(text)
+        print(f"analysis sent: {ok}")
+        return 0 if ok else 1
     return 0
 
 
@@ -406,6 +413,8 @@ def main(argv=None) -> int:
     r.add_argument("--symbol", default=None)
     r.add_argument("--lang", default="ar", choices=["ar", "en"])
     r.add_argument("--json", action="store_true")
+    r.add_argument("--send", action="store_true",
+                   help="deliver the full analysis to the chat")
     r.set_defaults(func=cmd_run)
 
     g = sub.add_parser("gather", help="only gather data into shared memory")

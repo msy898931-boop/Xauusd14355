@@ -38,6 +38,10 @@ on:
         description: "Send the conditional scenarios to the chat"
         type: boolean
         default: false
+      send_analysis:
+        description: "Run a full analysis and send it to the chat"
+        type: boolean
+        default: false
       level_hold_seconds:
         description: "How long the level watch should hold, in seconds (default 600)"
         type: number
@@ -159,3 +163,14 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python3 -m desk.cli scenarios --send
+
+      # The full read, on demand: every agent's study plus the final call. Sent
+      # from CI because the real token lives in repo secrets, not in any shell
+      # this desk is driven from.
+      - name: Send the full analysis
+        if: ${{ inputs.send_analysis }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python3 -m desk.cli run --send
