@@ -34,8 +34,25 @@ CONFIRM_ATR = 0.15
 
 def _closed(bars: list[dict]) -> list[dict]:
     """Only bars the feed marked closed. A partial bar's high/low/close move with
-    the tick, so a level read off it is not a fact."""
-    return [b for b in bars if not b.get("is_open") and not b.get("isOpen")]
+    the tick, so a level read off it is not a fact.
+
+    The flag is spelled three ways in this codebase and one of them is a trap:
+    the raw feed says `is_open`, the CSV says `isOpen`, and the reshaped frame the
+    agents use says `open`. So `open` is read as a flag ONLY when it is actually a
+    bool -- in the long-history and backtest shapes `open` is the bar's OPENING
+    PRICE, and treating a price as a truthy flag would drop every bar.
+    """
+    out = []
+    for b in bars:
+        flag = b.get("is_open")
+        if flag is None:
+            flag = b.get("isOpen")
+        if flag is None:
+            o = b.get("open")
+            flag = o if isinstance(o, bool) else False
+        if not flag:
+            out.append(b)
+    return out
 
 
 def _ohlc(bars: list[dict]) -> list[dict]:

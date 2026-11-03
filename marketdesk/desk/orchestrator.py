@@ -362,14 +362,32 @@ class Orchestrator:
         return True, fp
 
     def watch_once(self, notifier=None) -> dict:
-        """One scheduled pass: run the desk, and alert only if the signal is
-        actionable and not already sent. Returns a small dict for the caller."""
+        """One scheduled pass: run the desk, grade what is now gradeable, and
+        alert only if the signal is actionable and not already sent.
+
+        Grading runs HERE, on every pass, not only when someone presses the
+        hit-rate button. The scoreboard is the desk's only check on itself; if it
+        is written only on demand then a busy week leaves the record empty, and an
+        empty record cannot tell a good call from a lucky one. It reads candles
+        already in shared memory, so it costs no network call.
+        """
         from .notify import Notifier, SignalLedger
+        from .scoreboard import Grader
 
         run = self.run()
+        try:
+            board = Grader(self.shared).grade()
+            graded: dict[str, object] = {
+                "runs_graded": board.runs_graded,
+                "plans_graded": board.plans_graded,
+                "expectancy_r": (round(board.expectancy_r, 3)
+                                 if board.expectancy_r is not None else None)}
+        except Exception as exc:  # noqa: BLE001 - grading must never block an alert
+            graded = {"error": exc.__class__.__name__}
         ok, detail = self.actionable(run)
         out = {"run_id": run.run_id, "verdict": run.verdict,
-               "score": round(run.score, 3), "alerted": False, "reason": detail}
+               "score": round(run.score, 3), "alerted": False, "reason": detail,
+               "graded": graded}
         if not ok:
             return out
 

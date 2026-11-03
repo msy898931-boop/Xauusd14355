@@ -103,8 +103,19 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         # One reading. Alerts only on an actionable signal above
-        # DESK_ALERT_SCORE, and never the same one twice.
+        # DESK_ALERT_SCORE, and never the same one twice. It also grades every
+        # past call that now has a horizon behind it, so the record grows without
+        # anyone pressing a button.
         run: python3 -m desk.cli watch
+
+      # Print the running record into the log. The desk is silent by design, so
+      # without this the only place the scoreboard exists is a Telegram button --
+      # and a record nobody reads is a record that cannot correct anything. This
+      # makes each pass state, in the log, what the desk has actually scored.
+      - name: Scoreboard
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python3 -m desk.cli hit-rate || true
 
       # The desk alerts on its own verdict; this alerts on the levels a plan is
       # built around. The orchestrator can say "no trade" for weeks while price

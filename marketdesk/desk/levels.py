@@ -12,6 +12,7 @@ uses for its own alerts.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 
@@ -30,6 +31,11 @@ class Level:
 # near 3,900 and had been stale for days: every entry was *below* the market, so
 # `triggered` fired on all of them at once and the alerts were noise. Levels are
 # a statement about the current market, so they must be re-stated when it moves.
+#
+# This list is the FALLBACK. A run that has already printed its own triggers
+# watches those instead -- see `from_recommendation`. A hand-typed list goes
+# stale the moment the desk changes its mind, and an alert that watches yesterday
+# plan is an alert for a trade nobody is in.
 DEFAULT_LEVELS = (
     Level(3970.5, "الخط الفاصل", "above",
           "إغلاق فوقه = الصعود تأكد — الطريق لـ4,030 ثم 4,083"),
@@ -112,6 +118,45 @@ def near_message(lv: Level, live: float, dist: float) -> str:
             f"<i>لسا ما انكسر — هذا تحذير مبكر.</i>")
 
 
+def from_recommendation(rec: dict, live: float) -> tuple[Level, ...]:
+    """The levels the desk's own last plan is built around, as watchable levels.
+
+    This is the fix for the gap that made the alerts useless: the alert watched a
+    hand-typed list while the recommendation named its own entry, stop and
+    targets. The two drifted -- a run would say "break below 3,919.49" while the
+    alert watched 3,937.50, so the level the plan actually hinged on had no alert
+    at all. The trade the desk described could not be entered by anyone reading
+    its own alerts.
+
+    So the triggers come from the plan itself:
+      * the entry is a level, on whichever side the plan wants to be filled;
+      * the first target is a level, on the side that pays;
+      * the stop is a level, on the side that ends it -- the one line the trader
+        must not miss.
+    Returns () when there is nothing usable, so the caller can fall back rather
+    than alert on nothing.
+    """
+    entry = rec.get("entry")
+    stop = rec.get("stop")
+    targets = rec.get("targets") or []
+    direction = rec.get("direction")
+    if direction not in ("long", "short") or not entry or not stop:
+        return ()
+    target = targets[0].get("level") if targets and isinstance(targets[0], dict) \
+        else (targets[0] if targets else None)
+    long = direction == "long"
+    out: list[Level] = [
+        Level(float(entry), "دخول التوصية", "above" if long else "below",
+              f"{'شراء' if long else 'بيع'} من هنا — هاد مستوى الدخول"),
+        Level(float(stop), "وقف التوصية", "below" if long else "above",
+              "ضُرب الوقف هنا — الخطة انتهت"),
+    ]
+    if target is not None:
+        out.append(Level(float(target), "هدف التوصية", "above" if long else "below",
+                         "الهدف الأول — أول مستوى بيسحب الربح"))
+    return tuple(out)
+
+
 def watch_once(settings, *, symbol: str | None = None, within: float = 12.0,
                notifier=None, levels=None) -> dict:
     """One pass over the watched levels: alert once per break and once per
@@ -122,12 +167,31 @@ def watch_once(settings, *, symbol: str | None = None, within: float = 12.0,
     session that checked a different list, or skipped the ledger, would either
     spam or miss. The ledger keys on level+side, so a pass that runs every few
     seconds during a session still sends each signal exactly once.
+
+    With no explicit `levels`, the desk's OWN last plan is watched -- its entry,
+    stop and first target -- falling back to the hand-typed list only when there
+    is no plan to read. That is the difference between an alert that fires on the
+    trade the desk described and one that fires on a number typed days ago.
     """
     from . import sources
+    from .memory import SharedMemory
     from .notify import Notifier, SignalLedger
 
-    levels = DEFAULT_LEVELS if levels is None else levels
     symbol = symbol or settings.symbol
+    if levels is None:
+        levels = DEFAULT_LEVELS
+        try:
+            rows = SharedMemory(settings.shared_db).recent_runs(1)
+            if rows:
+                raw = rows[0]["payload"] or {}
+                payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                rec = payload.get("recommendation") or payload
+                if isinstance(rec, dict):
+                    own = from_recommendation(rec, 0.0)
+                    if own:
+                        levels = own
+        except Exception:  # noqa: BLE001 - a bad payload must not stop the watch
+            levels = DEFAULT_LEVELS
     live = float(sources.fetch_quote(symbol)["mid"])
     hits = triggered(live, levels)
     near = approaching(live, levels, within=within)

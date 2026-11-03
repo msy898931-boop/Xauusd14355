@@ -2598,6 +2598,135 @@ def test_scenarios_say_so_when_there_is_nothing_to_build_on():
     assert "لا توجد مستويات" in S.render(sc)
 
 
+def test_closed_filters_the_forming_bar_in_every_shape():
+    """The forming bar must never reach the levels.
+
+    The flag is spelled `open` in the frame the agents pass, but `open` is the
+    bar's OPENING PRICE in the CSV and long-history shapes. Reading `open` as a
+    flag unconditionally either leaks the partial bar (frame shape) or drops
+    every bar (CSV shape). Both are silent, and both move a level."""
+    from desk import scenarios as S
+
+    # frame shape: `open` is a bool flag
+    assert S._closed([{"open": False}, {"open": True}]) == [{"open": False}]
+    # CSV / long-history shape: `open` is a price, `isOpen` is the flag
+    csv = [{"open": 3900.0, "isOpen": False}, {"open": 3901.0, "isOpen": True}]
+    assert S._closed(csv) == [{"open": 3900.0, "isOpen": False}]
+    # raw feed shape: `is_open`
+    feed = [{"open": 3900.0, "is_open": 0}, {"open": 3901.0, "is_open": 1}]
+    assert S._closed(feed) == [{"open": 3900.0, "is_open": 0}]
+
+
+def test_a_forming_bar_cannot_move_a_scenario_trigger():
+    """The end-to-end version of the above: a partial bar's high/low walk with
+    the tick, so a pivot read off it is not a fact. Adding a wild forming bar
+    must not change a single trigger."""
+    import datetime as dt
+
+    from desk import scenarios as S
+
+    frames = {"1h": _wave_frame(base=3960.0), "4h": _wave_frame(base=3950.0)}
+    now = dt.datetime(2026, 11, 3, tzinfo=dt.UTC)
+    before = S.build(frames, 3960.0, calendar=[], now=now)
+
+    wild = dict(frames)
+    wild["1h"] = frames["1h"] + [{"t": "now", "o": 3960.0, "h": 4500.0,
+                                  "l": 3000.0, "c": 3960.0, "open": True}]
+    after = S.build(wild, 3960.0, calendar=[], now=now)
+
+    assert [s["trigger"] for s in before["scenarios"]] == \
+           [s["trigger"] for s in after["scenarios"]]
+
+
+def test_levels_come_from_the_desks_own_plan_not_a_typed_list():
+    """The alert must watch the levels the recommendation names.
+
+    A hand-typed list drifts from the plan: a run would say "break below
+    3,919.49" while the alert watched 3,937.50, so the line the trade hinged on
+    had no alert at all."""
+    from desk.levels import DEFAULT_LEVELS, from_recommendation
+
+    rec = {"direction": "short", "entry": 3927.43, "stop": 3945.16,
+           "targets": [{"level": 3898.95, "kind": "pivot"}]}
+    lv = from_recommendation(rec, 3927.43)
+    prices = {x.price for x in lv}
+    assert prices == {3927.43, 3945.16, 3898.95}
+    assert not (prices & {x.price for x in DEFAULT_LEVELS})
+    # a short's stop is watched as a break ABOVE it, its target BELOW
+    by_price = {x.price: x for x in lv}
+    assert by_price[3945.16].side == "above"
+    assert by_price[3898.95].side == "below"
+
+
+def test_a_plan_with_no_levels_falls_back_instead_of_watching_nothing():
+    from desk.levels import from_recommendation
+
+    assert from_recommendation({"direction": "no-trade"}, 3927.0) == ()
+    assert from_recommendation({}, 3927.0) == ()
+
+
+def test_watch_once_watches_the_last_runs_plan(tmp_path, monkeypatch):
+    """With no explicit list, the watcher reads the last run and watches the
+    levels IT printed -- so the alert tracks the desk as the desk changes."""
+    from desk import levels as L
+    from desk.memory import SharedMemory
+    from desk.notify import Notifier
+
+    s = _settings(tmp_path)
+    sh = SharedMemory(s.shared_db)
+    sh.save_run("r1", "XAUUSD", 0.0, 0.0, "short", -0.4,
+                {"recommendation": {
+                    "direction": "short", "entry": 3927.43, "stop": 3945.16,
+                    "targets": [{"level": 3898.95}]}})
+    monkeypatch.setattr("desk.sources.fetch_quote", lambda symbol: {"mid": 3927.5})
+
+    class Rec(Notifier):
+        def send(self, text):
+            return True
+
+    out = L.watch_once(s, notifier=Rec(s))
+    labels = {lbl for lbl in out["crossed"]} | {lbl for lbl, _ in out["near"]}
+    assert labels == {"دخول التوصية"}, "the plan's own levels must be watched"
+
+
+def test_a_broken_run_payload_falls_back_to_the_typed_list(tmp_path, monkeypatch):
+    """A corrupt payload must not silence the alert entirely."""
+    from desk import levels as L
+    from desk.memory import SharedMemory
+    from desk.notify import Notifier
+
+    s = _settings(tmp_path)
+    SharedMemory(s.shared_db).save_run("r1", "XAUUSD", 0.0, 0.0, "short", -0.4,
+                                       {"recommendation": "not a dict"})
+    monkeypatch.setattr("desk.sources.fetch_quote", lambda symbol: {"mid": 3937.6})
+
+    class Rec(Notifier):
+        def send(self, text):
+            return True
+
+    out = L.watch_once(s, notifier=Rec(s))
+    assert out["total"] == 5          # DEFAULT_LEVELS, not an empty list
+
+
+def test_watch_pass_grades_so_the_record_cannot_go_stale(tmp_path, monkeypatch):
+    """Grading runs on every pass, not only when the button is pressed."""
+    from desk.orchestrator import Orchestrator, Run
+
+    s = _settings(tmp_path)
+    desk = Orchestrator(s)
+    fake = Run(run_id="r1", symbol="XAUUSD", started=0.0, verdict="no-trade",
+               score=0.0, recommendation={})
+    monkeypatch.setattr(Orchestrator, "run", lambda self: fake)
+
+    class N:
+        def send(self, text):
+            return True
+
+    out = desk.watch_once(notifier=N())
+    assert "graded" in out
+    assert "runs_graded" in out["graded"]      # graded even when it stays silent
+
+
 def test_scenario_render_is_telegram_html():
     """The render must escape nothing it did not build: every level it prints is a
     number the desk computed, so a `<` can never reach Telegram as an entity."""
