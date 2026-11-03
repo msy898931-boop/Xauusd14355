@@ -121,3 +121,17 @@ both, or the webhook becomes a silently diverging client. A forged POST is
 rejected in constant time BEFORE an action; a bad update answers 200, not 5xx, or
 Telegram redelivers it forever. And watch "configured ≠ working": I put
 `DESK_LEVEL_EVERY` in render.yaml before the CLI read it. Detail → `2026-11-02.md`.
+
+## marketdesk: watch what the desk said, not a typed list (2026-11-02, latest)
+`desk levels` watches the desk's own last plan (entry/stop/target) — and now ALSO
+its scenario triggers (breakout/breakdown), because **a desk that says "no trade"
+still prints scenarios**: a plan-only watcher goes silent exactly when the market
+is deciding something. The watched set is their UNION, deduped by price (two
+sources naming one shelf is noise, not emphasis). `DESK_WATCH_SCENARIOS=0`
+restores plan-only. ⭐ **Measure before calling it too expensive** — building the
+scenarios looked heavy for a 10s loop, measured at **5 ms** (read-only over
+shared memory, no agent/model); the cost was never the reason to skip it.
+⭐ **A token embedded in a git remote expires, and `git push` then HANGS on a
+password prompt** rather than failing: re-point with
+`git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/...`.
+Detail → `2026-11-02.md`.
