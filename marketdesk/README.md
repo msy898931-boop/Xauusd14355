@@ -284,3 +284,18 @@ desk/
   report.py         the card (Arabic by default)
   cli.py            run / gather / memory / agents
 ```
+
+## Backtest
+
+`desk backtest` walks the stored daily bars, lets the real agents decide at each
+bar, and grades the plan the way the live scoreboard does. It runs offline from
+the CSV the repo ships and needs no key.
+
+```
+cd marketdesk && python3 -m desk.cli backtest
+```
+
+It reports expectancy in R, not just a hit rate, because 60% at 1.2R loses money.
+Read the confidence interval before the mean: a positive expectancy whose CI
+spans zero is not an edge. The current daily-bar sample shows **no proven edge**,
+and the command says so rather than rounding up.

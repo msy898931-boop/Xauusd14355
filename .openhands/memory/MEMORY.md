@@ -801,6 +801,22 @@ not the code, was lying.
 ⚠ **The desk has ZERO graded runs** — no track record at all. Biggest gap now.
 Data is thin below daily: 1d 500 bars, 4h 181, **1h 169 (~11 days), 15m 193
 (~4 days)**, so only 1d can support a real backtest.
+⭐⭐ **A backtest that reuses the live store reads the future.** `save_candles`
+upserts and never deletes, so bars from *after* the decision bar stay. Reusing
+the package store made the trend agent see all 500 bars at every step and call
+**"bear" 379/379** on a market that **rose 18%** — 306 trades, all shorts, at a
+"significant" **+0.23R**. Fresh temp store per walk + a guard that raises when
+the newest bar is not the decision bar. **Look-ahead produces a beautiful,
+significant, wrong answer.** Tell: an all-one-direction book, or a direction
+hit rate *below* 50% with a positive expectancy (profit only from the R skew).
+⭐ **The stop's ATR came from `frames["1h"]` alone** — absent that frame it was
+`None` and the stop silently became **1% of price**. Pick the frame from what
+the volatility agent reported; record it as `atr_frame`; warn when unmeasured.
+✅ **`desk backtest` exists now (PR #10) and the answer is: no proven edge.**
+Across warmups 60–300: meanR +0.13..+0.24, **every 95% CI spans zero** (t≤1.8);
+direction hit 55% on 235 (z=1.6). Sign flips with horizon; long 36%/-0.32R vs
+short 52%/+0.48R on samples too small to separate. Scope: news+correlation
+neutral (no historical feed), only 1d has history — a floor, not the whole desk.
 **Gates:** `pyproject.toml` + `marketdesk-ci.yml` run pytest/mypy/ruff on every
 push and PR. Coverage 84%; `sources/biquote.py` 36% (the only network module).
 **The repo is PUBLIC, has no licence, and tracks `biquote/*.csv`** (biquote's

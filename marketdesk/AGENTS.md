@@ -120,6 +120,15 @@ python3 -m ruff check .             # lint
     answered, the older ones are confirmed and acknowledged in the first reply
     with a count. Both extremes are wrong: silence loses the request, and a
     burst of 18 replies is unreadable.
+26. **A backtest that reuses the live store reads the future.** `save_candles`
+    upserts and never deletes, so a store that held bars from a previous pass
+    still holds them -- including bars *after* the one being decided. The first
+    version of `backtest.py` reused the package store: the trend agent saw all
+    500 bars at every step and called **"bear" 379/379 times** on a market that
+    rose 18%, producing 306 trades, every one a short, at a "significant"
+    +0.23R. A fresh store per walk is what makes it honest. The guard raises if
+    the newest bar is ever not the decision bar. **Look-ahead does not announce
+    itself; it produces a beautiful, significant, wrong answer.**
 27. **A stop inside the noise is not a stop — and it inflates the R:R.** The
     plan hung its stop on the *nearest* resistance plus a 0.3-ATR cushion. Live,
     that was 6.49 above entry while the 1h ATR was 15.31 -- **0.42 ATR**, inside
