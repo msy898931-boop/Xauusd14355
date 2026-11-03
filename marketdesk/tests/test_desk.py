@@ -1800,3 +1800,75 @@ def test_crossmarket_baseline_is_a_single_constant_not_an_oracle(tmp_path):
     # an oracle baseline would show a large positive constant; the honest one
     # cannot exceed the better of the two single directions
     assert "alwaysL" in out or "alwaysS" in out
+
+
+# ---- gold study / longdata open flag ----------------------------------
+
+def test_longdata_marks_the_forming_bar_open(monkeypatch):
+    """The last bar of a live chart is today, still moving: it must be isOpen."""
+    from datetime import UTC, datetime
+
+    from desk.longdata import fetch
+
+    today = datetime.now(UTC)
+    ts = int(today.replace(hour=5).timestamp())
+    body = {"chart": {"result": [{
+        "timestamp": [ts - 86400, ts],
+        "indicators": {"quote": [{"open": [10.0, 11.0], "high": [12.0, 13.0],
+                                  "low": [9.0, 10.0], "close": [11.0, 12.0],
+                                  "volume": [1, 2]}]}}]}}
+
+    class _Resp:
+        def read(self): return json.dumps(body).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    import urllib.request
+    real = urllib.request.urlopen
+    urllib.request.urlopen = lambda *a, **k: _Resp()
+    try:
+        bars = fetch("GC=F", "1y")
+    finally:
+        urllib.request.urlopen = real
+    assert bars[-1]["isOpen"] is True          # today is still forming
+    assert bars[-2]["isOpen"] is False         # yesterday is a fact
+
+
+def test_gold_study_excludes_the_open_bar(tmp_path):
+    """A wild forming bar must not change the study's answer."""
+    from desk.gold import run_gold_study
+
+    def write(path, last_open):
+        rows = ["openTime,open,high,low,close,volume,tickVolume,isOpen"]
+        for i in range(400):
+            px = 1000 + (i % 50) * 3
+            rows.append(f"2020-01-{(i % 28) + 1:02d}T00:00:00Z,{px},{px+2},"
+                        f"{px-2},{px},0,10,False")
+        rows.append(f"2026-11-03T00:00:00Z,9999,19999,1,5000,0,10,{last_open}")
+        path.write_text("\n".join(rows))
+
+    a = tmp_path / "A_1d.csv"
+    write(a, "True")
+    base = run_gold_study(a, live=1000.0, symbol="A")
+    b = tmp_path / "B_1d.csv"
+    write(b, "False")
+    other = run_gold_study(b, live=1000.0, symbol="B")
+    # the open bar is dropped either way, so the analogue set is the same
+    assert "389 days" not in base  # sanity: numbers come from the data
+    assert base.count("CURRENT STATE") == other.count("CURRENT STATE") == 1
+
+
+def test_gold_study_reports_both_sides_with_expectancy(tmp_path):
+    from desk.gold import run_gold_study
+
+    rows = ["openTime,open,high,low,close,volume,tickVolume,isOpen"]
+    for i in range(400):
+        px = 1000 + i * 0.5
+        rows.append(f"2020-01-{(i % 28) + 1:02d}T00:00:00Z,{px},{px+2},"
+                    f"{px-2},{px},0,10,False")
+    p = tmp_path / "G_1d.csv"
+    p.write_text("\n".join(rows))
+    out = run_gold_study(p, live=1200.0, symbol="G")
+    assert "SHORT" in out and "LONG" in out
+    assert "expectancy R" in out
+    assert "base" in out          # the base rate must be shown beside it

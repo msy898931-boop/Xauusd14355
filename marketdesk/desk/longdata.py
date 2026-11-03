@@ -46,6 +46,14 @@ def get(url: str, tries: int = 4):
 
 
 def fetch(symbol: str, rng: str = "10y") -> list[dict]:
+    """Daily bars from Yahoo, oldest first.
+
+    The last bar of a live chart is the day still forming -- its close moves with
+    the tick. It is marked `isOpen` rather than dropped, because the date is real
+    and a caller may want to know the market is mid-session; the study and the
+    backtest exclude it. Marking it closed would be the same look-at-the-partial-
+    bar mistake the desk fixed twice already.
+    """
     body = get(BASE.format(sym=symbol, rng=rng))
     res = (body.get("chart") or {}).get("result") or []
     if not res:
@@ -56,7 +64,7 @@ def fetch(symbol: str, rng: str = "10y") -> list[dict]:
     o, h, lo, c, v = (q.get("open") or [], q.get("high") or [],
                       q.get("low") or [], q.get("close") or [],
                       q.get("volume") or [])
-    out = []
+    out: list[dict] = []
     for i, t in enumerate(ts):
         try:
             if None in (o[i], h[i], lo[i], c[i]):
@@ -71,6 +79,9 @@ def fetch(symbol: str, rng: str = "10y") -> list[dict]:
             })
         except (IndexError, TypeError, ValueError):
             continue
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    if out and out[-1]["openTime"][:10] == today:
+        out[-1]["isOpen"] = True
     return out
 
 
