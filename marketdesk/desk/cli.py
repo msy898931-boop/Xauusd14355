@@ -72,6 +72,37 @@ def cmd_hitrate(args) -> int:
     return 0
 
 
+def cmd_levels(args) -> int:
+    """One pass: alert once for each watched level the price has crossed.
+
+    Run from a schedule. A level fires once (the ledger keys on level+side), so
+    a 15-minute cron does not repeat itself while the price sits past a level.
+    """
+    from . import sources
+    from .levels import DEFAULT_LEVELS, fingerprint, message, triggered
+    from .notify import Notifier, SignalLedger
+
+    s = _settings(args)
+    symbol = args.symbol or "XAUUSD"
+    live = float(sources.fetch_quote(symbol)["mid"])
+    hits = triggered(live, DEFAULT_LEVELS)
+    ledger = SignalLedger(s.signal_ledger)
+    n = Notifier(s)
+    sent = []
+    for lv in hits:
+        fp = fingerprint(lv)
+        if ledger.seen(fp):
+            continue
+        if n.send(message(lv, live)):
+            ledger.record(fp, f"{lv.price:g}")
+            sent.append(lv.label)
+    print(f"live {live:,.2f} · crossed {len(hits)} of {len(DEFAULT_LEVELS)} "
+          f"levels · alerted {len(sent)}")
+    for lv in hits:
+        print(f"  {'▲' if lv.side == 'above' else '▼'} {lv.price:,.2f}  {lv.label}")
+    return 0
+
+
 def cmd_plan(args) -> int:
     """The live two-sided plan: where to act and where to get out, with evidence.
 
@@ -282,6 +313,9 @@ def main(argv=None) -> int:
     h = sub.add_parser("hit-rate", help="grade past runs against what price did")
     h.add_argument("--symbol", default=None)
     h.set_defaults(func=cmd_hitrate)
+
+    lv = sub.add_parser("levels", help="alert once when price crosses a watched level")
+    lv.set_defaults(func=cmd_levels)
 
     pl = sub.add_parser("plan", help="live two-sided plan with stop and target ladder")
     pl.add_argument("--csv", default="../biquote/XAUUSD_1d.csv")
