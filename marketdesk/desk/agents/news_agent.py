@@ -24,6 +24,49 @@ BEARISH = ("fall", "drop", "slump", "plunge", "decline", "sell-off", "selloff",
            "rate hike", "hawkish", "strong dollar", "profit-taking", "profit taking",
            "risk-on", "risk on", "rebound in stocks", "strong jobs", "tapering")
 
+# What makes a headline about *gold*. Gold is driven by the dollar, real yields,
+# Fed policy, inflation and safe-haven demand -- not by any headline the feed
+# happens to return. This is the filter that keeps the news score measuring the
+# instrument: a live pull under `symbol=XAUUSD` returned Apple, Aramco and a
+# crypto story, and the keyword map then read "Alphabet bond sale" as bullish
+# for gold. A headline with none of these terms is not scored at all.
+GOLD_TERMS = (
+    "gold", "xau", "bullion", "precious metal",
+    "fed", "fomc", "federal reserve", "powell", "rate cut", "rate hike",
+    "interest rate", "monetary policy", "quantitative easing",
+    "dollar", "dxy", "greenback",
+    "inflation", "cpi", "pce", "deflation", "disinflation",
+    "treasury yield", "bond yield", "real yield", "yields",
+    "safe haven", "safe-haven", "haven", "flight to quality",
+    "central bank", "ecb", "boj", "bank of england", "boe",
+    "recession", "stimulus", "tariff", "trade war",
+    "war", "conflict", "geopolit", "sanction", "crisis", "tension",
+    "payroll", "unemployment", "jolts", "jobless", "nonfarm", "non-farm",
+    "ism", "pmi", "gdp", "retail sales", "adp",
+)
+
+
+def text_of(n: dict) -> str:
+    """The text a labeller reads: title and description together.
+
+    Module-level so the relevance filter and both labellers read the *same*
+    string; feeding the model only the title made every keyword hit in the
+    description look like a model correction.
+    """
+    return f"{n.get('title', '')} {n.get('description', '')}".strip()
+
+
+def is_gold_relevant(text: str) -> bool:
+    """True when `text` carries a driver that can move gold.
+
+    A whitelist, so an unknown-but-relevant story is dropped rather than scored
+    as noise -- the desk would rather say "no gold news" than invent a tone from
+    an unrelated equity headline.
+    """
+    t = (text or "").lower()
+    return any(term in t for term in GOLD_TERMS)
+
+
 
 def classify(text: str) -> int:
     t = (text or "").lower()
@@ -92,9 +135,6 @@ class NewsAgent(Agent):
         one happened to see. Feeding the model only the title would make every
         keyword hit in the description look like a model correction.
         """
-        def text_of(n: dict) -> str:
-            return f"{n.get('title', '')} {n.get('description', '')}".strip()
-
         batch = news[:25]
         keyword = [classify(text_of(n)) for n in news]
         labels = list(keyword)
@@ -119,6 +159,13 @@ class NewsAgent(Agent):
         news, cal = self.gather()
         if not news:
             news = self.shared.load_news(limit=30)
+
+        # Score only headlines that carry a gold driver. The feed ignores the
+        # symbol, so the raw list is the whole market; scoring it would make the
+        # news tone a reading of the S&P, not of gold.
+        fetched = len(news)
+        news = [n for n in news if is_gold_relevant(text_of(n))]
+        dropped = fetched - len(news)
 
         labels, keyword, lstat = self._label(news)
         scored = []
@@ -153,15 +200,26 @@ class NewsAgent(Agent):
         stance = self.stance_of(norm)
         top = [s["title"] for s in scored[:5]]
         event_txt = ar.listing([ar.event_name(s.get("name")) for s in soon])
-        facts = (f"{len(scored)} عنواناً، الصافي {tally:+d}؛ الأحدث: {top}؛ "
-                 f"أحداث عالية التأثير خلال {self.settings.event_window_h:g} ساعة: "
-                 f"{event_txt}")
+        # Say how many headlines were read and how many were dropped as not
+        # about gold. A tone computed from 3 of 30 headlines is not the same
+        # claim as one from 30, and the reader is told which it is.
+        if fetched and not news:
+            tone_txt = (f"ما في عنوان يخصّ الذهب من أصل {fetched} عنواناً — "
+                        f"لا قراءة للنبرة.")
+        else:
+            tone_txt = (f"نبرة الأخبار {ar.stance(stance)} "
+                        f"(صافي {tally:+d} على {len(scored)} عنواناً "
+                        f"من أصل {fetched}).")
+        facts = (f"{len(scored)} عنواناً يخصّ الذهب من أصل {fetched}؛ الصافي {tally:+d}؛ "
+                 f"الأحدث: {top}؛ أحداث عالية التأثير خلال "
+                 f"{self.settings.event_window_h:g} ساعة: {event_txt}")
         summary = self.narrate(facts, "لخّص تدفّق الأخبار وخطر الأحداث.") or (
-            f"نبرة الأخبار {ar.stance(stance)} (صافي {tally:+d} على {len(scored)} عنواناً). "
+            f"{tone_txt} "
             f"خطر الأحداث خلال {self.settings.event_window_h:g} ساعة: "
             f"{event_txt}.")
         return Study(self.name, self.kind, stance, conf, norm, summary,
                      {"headlines": scored[:20], "net": tally,
+                      "fetched": fetched, "dropped_irrelevant": dropped,
                       "upcoming_events": upcoming[:10],
                       "imminent_events": soon,
                       "event_risk_24h": bool(soon),   # kept: older readers/tests

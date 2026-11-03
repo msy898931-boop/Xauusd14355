@@ -21,8 +21,12 @@ name: marketdesk-watch
 
 on:
   schedule:
-    # Every 15 minutes. GitHub cron is UTC and best-effort.
-    - cron: "*/15 * * * *"
+    # Every 15 minutes, Sunday to Friday (cron day-of-week: 0=Sun ... 6=Sat).
+    # The spot market is shut from Friday's New York close until Sydney opens on
+    # Sunday night, so a Saturday scan reads a frozen tape. The desk also stands
+    # down on a closed market on its own (desk/session.py) -- this keeps the
+    # schedule from even waking a runner. GitHub cron is UTC and best-effort.
+    - cron: "*/15 * * * 0-5"
   # Manual trigger, for testing the pipeline end to end.
   workflow_dispatch:
     inputs:
