@@ -1989,6 +1989,75 @@ def test_listen_stops_on_a_transport_failure_instead_of_retrying(tmp_path, monke
     assert out["passes"] == 1        # it gave up immediately
 
 
+def test_listen_checks_the_levels_and_reports_what_it_sent(tmp_path, monkeypatch):
+    """A live session is worth more than the cron only because it checks the
+    levels between passes -- a level touched and rejected between two scheduled
+    runs is invisible to the cron. The session must do that check and say so."""
+    from desk.bot import TelegramBot
+
+    bot, _ = _fake_bot(tmp_path, monkeypatch, updates=[])
+    monkeypatch.setattr(TelegramBot, "send", lambda self, text, **kw: True)
+    checked = []
+
+    def fake_watch(settings, **kw):
+        checked.append(1)
+        return {"live": 3970.0, "alerted": ["الخط الفاصل"], "warned": []}
+
+    monkeypatch.setattr("desk.levels.watch_once", fake_watch)
+    out = bot.listen(seconds=1, poll_s=1, level_every=1)
+    assert out["ok"] is True
+    assert out["checks"] >= 1
+    assert out["alerts"] == ["الخط الفاصل"]
+
+
+def test_a_level_check_failure_does_not_kill_the_session(tmp_path, monkeypatch):
+    """Presses are the primary job. If the quote source is down the session must
+    keep answering, not die with the level check."""
+    from desk.bot import TelegramBot
+
+    bot, _ = _fake_bot(tmp_path, monkeypatch, updates=[_press(3, "market")])
+    monkeypatch.setattr(TelegramBot, "send", lambda self, text, **kw: True)
+
+    def boom(settings, **kw):
+        raise RuntimeError("source down")
+
+    monkeypatch.setattr("desk.levels.watch_once", boom)
+
+    class FakeActions:
+        def __init__(self, *a, **k): pass
+        def run(self, action): return f"answer:{action}"
+
+    monkeypatch.setattr("desk.actions.Actions", FakeActions)
+    out = bot.listen(seconds=1, poll_s=1, level_every=1)
+    assert out["ok"] is True
+    assert out["handled"] == ["market"]      # the press was still answered
+    assert out["checks"] == 0                # the failed check is not counted
+
+
+def test_watch_once_sends_each_signal_exactly_once(tmp_path, monkeypatch):
+    """The session checks every minute; without the ledger that would be a
+    message a minute. The second pass must send nothing."""
+    from desk import levels as L
+    from desk.levels import Level
+    from desk.notify import Notifier
+
+    s = _settings(tmp_path)
+    sent: list[str] = []
+
+    class Recorder(Notifier):
+        def send(self, text):
+            sent.append(text)
+            return True
+
+    monkeypatch.setattr("desk.sources.fetch_quote", lambda symbol: {"mid": 3970.6})
+    lv = Level(3970.5, "الخط الفاصل", "above", "note")
+    first = L.watch_once(s, notifier=Recorder(s), levels=(lv,))
+    second = L.watch_once(s, notifier=Recorder(s), levels=(lv,))
+    assert first["alerted"] == ["الخط الفاصل"]
+    assert second["alerted"] == []           # already in the ledger
+    assert len(sent) == 1
+
+
 def test_plan_button_builds_a_two_sided_answer(tmp_path):
     """The plan button must show both sides, with a stop each."""
     from desk.actions import Actions

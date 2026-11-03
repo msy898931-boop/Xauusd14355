@@ -110,3 +110,44 @@ def near_message(lv: Level, live: float, dist: float) -> str:
             f"السعر {live:,.2f} يقترب من {arrow} <b>{lv.price:,.2f}</b> ({lv.label})\n"
             f"باقي {dist:,.1f} نقطة، والكسر يكون {side}.\n"
             f"<i>لسا ما انكسر — هذا تحذير مبكر.</i>")
+
+
+def watch_once(settings, *, symbol: str | None = None, within: float = 12.0,
+               notifier=None, levels=None) -> dict:
+    """One pass over the watched levels: alert once per break and once per
+    approach, then say what happened.
+
+    This is the whole of the level watcher, in one place, so the scheduled
+    `levels` command and a live `--listen` session cannot drift apart -- a live
+    session that checked a different list, or skipped the ledger, would either
+    spam or miss. The ledger keys on level+side, so a pass that runs every few
+    seconds during a session still sends each signal exactly once.
+    """
+    from . import sources
+    from .notify import Notifier, SignalLedger
+
+    levels = DEFAULT_LEVELS if levels is None else levels
+    symbol = symbol or settings.symbol
+    live = float(sources.fetch_quote(symbol)["mid"])
+    hits = triggered(live, levels)
+    near = approaching(live, levels, within=within)
+    ledger = SignalLedger(settings.signal_ledger)
+    n = notifier if notifier is not None else Notifier(settings)
+    sent, warned = [], []
+    for lv in hits:
+        fp = fingerprint(lv)
+        if ledger.seen(fp):
+            continue
+        if n.send(message(lv, live)):
+            ledger.record(fp, f"{lv.price:g}")
+            sent.append(lv.label)
+    for lv, dist in near:
+        fp = near_fingerprint(lv)
+        if ledger.seen(fp):
+            continue
+        if n.send(near_message(lv, live, dist)):
+            ledger.record(fp, f"near {lv.price:g}")
+            warned.append(lv.label)
+    return {"live": live, "total": len(levels), "crossed": [lv.label for lv in hits],
+            "near": [(lv.label, dist) for lv, dist in near],
+            "alerted": sent, "warned": warned}

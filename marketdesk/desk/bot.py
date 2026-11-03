@@ -274,7 +274,8 @@ class TelegramBot:
         return self.send_photo(png, caption, chat_id=chat, markup=markup)
 
     def listen(self, orchestrator=None, *, seconds: int = 300,
-               max_replies: int = 8, poll_s: int = 50) -> dict:
+               max_replies: int = 8, poll_s: int = 50,
+               level_every: int = 60, levels=None) -> dict:
         """Stay connected and answer presses for `seconds`, not once.
 
         This is what removes the up-to-five-minute wait. `poll()` makes one
@@ -283,18 +284,41 @@ class TelegramBot:
         returns the moment something is pressed, then loops. A press is answered
         in about a second, and the runner still costs one job.
 
+        A live session also checks the watched levels every `level_every`
+        seconds. That is the whole reason a session is worth more than the cron
+        here: a scheduled pass can only see the price at its own tick, so a level
+        that is touched and rejected between two passes is missed entirely. The
+        session sees it, and the ledger still guarantees each signal is sent
+        once. A level check failure must never kill the session -- the presses
+        are the primary job.
+
         The loop stops at the deadline so the job ends cleanly rather than being
         killed mid-answer, and it stops early on a transport failure -- retrying
         a rejected token for five minutes would just burn the runner.
         """
         if not self.available:
             return {"ok": False, "reason": "not configured"}
+        from .levels import watch_once
+
         started = time.time()
         handled: list[str] = []
         offset: int | None = None
         passes = 0
+        checks = 0
+        alerts: list[str] = []
+        next_check = started          # check the levels immediately, then on cadence
         try:
             while time.time() - started < seconds:
+                if time.time() >= next_check:
+                    try:
+                        out = watch_once(self.settings, notifier=self.notifier,
+                                         levels=levels)
+                        checks += 1
+                        alerts.extend(out.get("alerted") or [])
+                        alerts.extend(out.get("warned") or [])
+                    except Exception:  # noqa: BLE001 - a level check must not kill the session
+                        pass
+                    next_check = time.time() + max(5, level_every)
                 left = seconds - (time.time() - started)
                 out = self.poll(orchestrator, offset=offset,
                                 budget_s=max(20.0, min(left, 240.0)),
@@ -303,12 +327,14 @@ class TelegramBot:
                 passes += 1
                 if not out.get("ok"):
                     return {**out, "handled": handled, "passes": passes,
+                            "checks": checks, "alerts": alerts,
                             "listened_s": round(time.time() - started, 1)}
                 offset = out.get("next_offset", offset)
                 handled.extend(out.get("handled") or [])
         except KeyboardInterrupt:
             pass
         return {"ok": True, "handled": handled, "passes": passes,
+                "checks": checks, "alerts": alerts,
                 "listened_s": round(time.time() - started, 1),
                 "next_offset": offset}
 

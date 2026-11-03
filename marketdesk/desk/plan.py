@@ -86,6 +86,13 @@ def build_plan(bars: list[dict], live: float) -> dict:
         "rsi": ind.rsi(closes, 14),
         "prior_high": hi,
         "prior_low": lo,
+        # The window's dates are printed with the range: a 20-day range can be
+        # dominated by a move that is weeks old, and a trigger 290 points away
+        # reads as a mistake until the reader sees that the range starts on the
+        # day gold was 300 points higher.
+        "window_start": str(window[0].get("openTime", ""))[:10],
+        "window_end": str(window[-1].get("openTime", ""))[:10],
+        "window_bars": len(window),
         "range_pct": (live - lo) / (hi - lo) * 100 if hi > lo else 0.0,
         "long": long_side,
         "short": short_side,
@@ -124,6 +131,9 @@ def format_plan(p: dict, symbol: str = "XAUUSD") -> str:
              f"{'>' if p['ema20'] > p['ema50'] else '<'} ema50)")
     L.append(f"  prior 20d range   {p['prior_low']:,.2f} .. {p['prior_high']:,.2f}   "
              f"(live is {p['range_pct']:.0f}% up the range)")
+    if p.get("window_start"):
+        L.append(f"                    window {p['window_start']} .. {p['window_end']} "
+                 f"({p['window_bars']} bars)")
     L.append("")
     L.extend(_side_lines(p["long"]))
     L.append("")

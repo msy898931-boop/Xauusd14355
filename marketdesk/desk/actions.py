@@ -202,6 +202,11 @@ class Actions:
             f"السعر <b>{p['live']:,.2f}</b> · الاتجاه العام <b>{trend}</b>",
             f"ATR {p['atr']:,.2f} · RSI {p['rsi']:.0f} · "
             f"المدى {p['prior_low']:,.2f}–{p['prior_high']:,.2f}",
+        ]
+        if p.get("window_start"):
+            lines.append(f"<i>المدى محسوب على {p['window_bars']} يوم: "
+                         f"{p['window_start']} ← {p['window_end']}</i>")
+        lines += [
             "",
             "🟢 <b>شراء مشروط</b>",
             f"  يتفعّل فوق <b>{long_s.trigger:,.2f}</b>",

@@ -131,48 +131,19 @@ def cmd_levels(args) -> int:
     a 15-minute cron does not repeat itself while the price sits past a level.
     The proximity warning has its own key, so a level can warn and then fire.
     """
-    from . import sources
-    from .levels import (
-        DEFAULT_LEVELS,
-        approaching,
-        fingerprint,
-        message,
-        near_fingerprint,
-        near_message,
-        triggered,
-    )
-    from .notify import Notifier, SignalLedger
+    from .levels import watch_once
 
     s = _settings(args)
-    symbol = args.symbol or "XAUUSD"
-    live = float(sources.fetch_quote(symbol)["mid"])
+    symbol = args.symbol or s.symbol
     within = getattr(args, "within", 12.0)
-    hits = triggered(live, DEFAULT_LEVELS)
-    near = approaching(live, DEFAULT_LEVELS, within=within)
-    ledger = SignalLedger(s.signal_ledger)
-    n = Notifier(s)
-    sent, warned = [], []
-    for lv in hits:
-        fp = fingerprint(lv)
-        if ledger.seen(fp):
-            continue
-        if n.send(message(lv, live)):
-            ledger.record(fp, f"{lv.price:g}")
-            sent.append(lv.label)
-    for lv, dist in near:
-        fp = near_fingerprint(lv)
-        if ledger.seen(fp):
-            continue
-        if n.send(near_message(lv, live, dist)):
-            ledger.record(fp, f"near {lv.price:g}")
-            warned.append(lv.label)
-    print(f"live {live:,.2f} · crossed {len(hits)} of {len(DEFAULT_LEVELS)} "
-          f"levels · alerted {len(sent)} · near {len(near)} · warned {len(warned)}")
-    for lv in hits:
-        print(f"  {'▲' if lv.side == 'above' else '▼'} {lv.price:,.2f}  {lv.label}")
-    for lv, dist in near:
-        print(f"  ~ {'▲' if lv.side == 'above' else '▼'} {lv.price:,.2f}  "
-              f"{lv.label}  ({dist:,.1f} away)")
+    out = watch_once(s, symbol=symbol, within=within)
+    print(f"live {out['live']:,.2f} · crossed {len(out['crossed'])} of {out['total']} "
+          f"levels · alerted {len(out['alerted'])} · near {len(out['near'])} · "
+          f"warned {len(out['warned'])}")
+    for label in out["crossed"]:
+        print(f"  ▲ {label}")
+    for label, dist in out["near"]:
+        print(f"  ~ {label}  ({dist:,.1f} away)")
     return 0
 
 
