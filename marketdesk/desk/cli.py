@@ -72,6 +72,38 @@ def cmd_hitrate(args) -> int:
     return 0
 
 
+def cmd_backtest(args) -> int:
+    """Walk the stored daily bars and grade every plan the desk would have made.
+
+    No network: the bars are read from the CSV the repo already ships, and the
+    news / cross-market feeds are neutral by design (there is no history for
+    them). The result is a floor on the desk -- the price-only subset on one
+    timeframe -- and it is reported as such, never as the whole desk's record.
+    """
+    from pathlib import Path
+
+    from .backtest import buy_and_hold, format_report, load_daily, run_backtest
+
+    path = Path(args.csv) if args.csv else _default_csv()
+    if not path.exists():
+        print(f"no bars at {path} — pass --csv")
+        return 2
+    rep = run_backtest(path, symbol=args.symbol or "XAUUSD", warmup=args.warmup)
+    hold = buy_and_hold(load_daily(path), args.warmup)
+    print(format_report(rep, buy_hold_pct=hold))
+    return 0
+
+
+def _default_csv():
+    from pathlib import Path
+    # The repo ships the daily bars beside the package; fall back to cwd.
+    for cand in (Path(__file__).resolve().parent.parent.parent / "biquote" / "XAUUSD_1d.csv",
+                 Path("biquote/XAUUSD_1d.csv")):
+        if cand.exists():
+            return cand
+    return Path("XAUUSD_1d.csv")
+
+
 def cmd_watch(args) -> int:
     """One scheduled pass. Alert only on an actionable, not-yet-sent signal."""
     import json
@@ -208,6 +240,13 @@ def main(argv=None) -> int:
     h = sub.add_parser("hit-rate", help="grade past runs against what price did")
     h.add_argument("--symbol", default=None)
     h.set_defaults(func=cmd_hitrate)
+
+    bt = sub.add_parser("backtest", help="grade the method on stored daily bars")
+    bt.add_argument("--symbol", default=None)
+    bt.add_argument("--csv", default=None, help="daily bars CSV (default: the repo's)")
+    bt.add_argument("--warmup", type=int, default=120,
+                    help="bars the agents must see before deciding")
+    bt.set_defaults(func=cmd_backtest)
 
     w = sub.add_parser("watch", help="one scheduled pass; alert only if actionable")
     w.add_argument("--symbol", default=None)

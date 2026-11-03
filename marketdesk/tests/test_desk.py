@@ -1433,3 +1433,69 @@ def test_a_real_stop_makes_a_near_target_unpayable(tmp_path):
     plan = orch._plan("short", 3922.07, 15.31, levels, None, {}, -0.47)
     assert plan["entry"] is None and plan["stop"] is None
     assert "reward:risk" in plan["levels_note"]
+
+
+# ---- backtest ---------------------------------------------------------
+
+def _daily_csv(tmp_path, n=300, start=3000.0, step=3.0):
+    """A synthetic daily series with an uptrend then a downturn, so both
+    directions can appear."""
+    import csv
+    p = tmp_path / "XAUUSD_1d.csv"
+    with p.open("w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["openTime", "open", "high", "low", "close", "volume",
+                    "tickVolume", "isOpen"])
+        for i in range(n):
+            c = start + i * step + (30 if i > n // 2 else 0)
+            w.writerow([f"2025-{(i // 28) % 12 + 1:02d}-{i % 28 + 1:02d}T00:00:00Z",
+                        c - 1, c + 3, c - 3, c, 0, 100 + i, "False"])
+    return p
+
+
+def test_backtest_never_reads_a_bar_from_the_future(tmp_path, monkeypatch):
+    """The store upserts and never deletes, so a reused store leaks look-ahead.
+
+    The first version of the backtest reused the package store; the trend agent
+    saw all 500 bars at every step and called "bear" 379/379 times on a market
+    that rose 18%. The walk must isolate its own store, and the guard inside
+    `_walk_history` must fire if the newest bar is ever not the decision bar.
+    """
+    from desk import backtest
+
+    # A stale store holding bars from the far future must not be visible.
+    stale = Settings()
+    stale.home = tmp_path
+    stale.ensure_dirs()
+    sh = SharedMemory(stale.shared_db)
+    sh.save_candles("XAUUSD", "1d", _bars(400, start=9000.0))
+    newest_before = sh.load_candles("XAUUSD", "1d")[-1]["open_time"]
+
+    csv_path = _daily_csv(tmp_path)
+    rep = backtest.run_backtest(csv_path, warmup=60, horizons=(1, 5))
+
+    # The stale rows were never consulted: the decisions are built from the CSV,
+    # and the package store is untouched.
+    assert sh.load_candles("XAUUSD", "1d")[-1]["open_time"] == newest_before
+    assert rep.decisions > 0
+    # No decision was priced off the stale 9000-level bars: every entry lies in
+    # the CSV's own range. This is the direct check that the leak is gone.
+    assert all(2000 < t.entry < 5000 for t in rep.trades)
+
+
+def test_backtest_guard_rejects_a_leaked_bar(tmp_path, monkeypatch):
+    """If the decision bar is ever not the newest bar, the walk must raise."""
+    from desk import backtest
+
+    real_save = SharedMemory.save_candles
+
+    def leaky_save(self, symbol, tf, bars):
+        # Simulate a store that keeps a future bar around.
+        extra = {"openTime": "2099-01-01T00:00:00Z", "open": 1.0, "high": 1.0,
+                 "low": 1.0, "close": 1.0, "tickVolume": 0, "isOpen": False}
+        return real_save(self, symbol, tf, list(bars) + [extra])
+
+    monkeypatch.setattr(SharedMemory, "save_candles", leaky_save)
+    csv_path = _daily_csv(tmp_path)
+    with pytest.raises(AssertionError, match="look-ahead"):
+        backtest.run_backtest(csv_path, warmup=60, horizons=(1,))

@@ -156,7 +156,7 @@ class Orchestrator:
         levels = by_name.get("levels")
         px = (levels.payload.get("price") if levels else None) or (self.shared.load_quote(self.settings.symbol) or {}).get("mid")
         vol = by_name.get("volatility")
-        atr1h = (vol.payload.get("frames", {}).get("1h", {}) or {}).get("atr") if vol else None
+        atr1h, atr_frame = self._atr_for_stop(vol)
 
         if not allowed:
             verdict = "no-trade"
@@ -168,6 +168,7 @@ class Orchestrator:
             verdict = "no-trade"
 
         rec = self._plan(verdict, px, atr1h, levels, risk, by_name, norm)
+        rec["atr_frame"] = atr_frame
         # A plan the reward:risk filter rejected is not a trade: the direction may
         # be right, but the entry is not worth taking. Downgrade honestly.
         if verdict in ("long", "short") and rec.get("entry") is None:
@@ -201,12 +202,34 @@ class Orchestrator:
                         1.0 if d["structure"] == "up" else (-1.0 if d["structure"] == "down" else 0.0))
         return {tf: round(sum(v) / len(v), 2) for tf, v in acc.items() if v}
 
+    @staticmethod
+    def _atr_for_stop(vol) -> tuple[float | None, str | None]:
+        """The ATR that sizes the stop, and which frame it came from.
+
+        This used to read `frames["1h"]` and nothing else. When the 1h frame is
+        absent -- a daily-only backtest, or an agent that was restricted to a
+        coarser frame -- that returned None and the stop fell back to 1% of
+        price *silently*. A made-up risk is worse than no trade, so the frame is
+        now chosen from what the volatility agent actually reported, and the
+        caller is told which one it was.
+        """
+        frames = ((vol.payload.get("frames") if vol else {}) or {})
+        for tf in ("1h", "4h", "1d", "30m", "15m", "5m", "1m"):
+            a = (frames.get(tf) or {}).get("atr")
+            if isinstance(a, (int, float)) and a > 0:
+                return float(a), tf
+        return None, None
+
     def _plan(self, verdict, px, atr1h, levels, risk, by_name, score) -> dict:
         """Build the trade plan. Every level is tagged pivot / fib / projection."""
         plan = {"direction": verdict, "entry": None, "stop": None,
                 "targets": [], "levels_note": None, "warnings": []}
         if risk:
-            plan["warnings"] = risk.payload.get("warnings", [])
+            plan["warnings"] = list(risk.payload.get("warnings", []))
+        if atr1h is None and verdict in ("long", "short"):
+            plan["warnings"].append(
+                "no ATR was reported, so the stop is 1% of price, not a measured "
+                "range — treat the risk:reward as indicative only.")
         if verdict == "no-trade" or px is None:
             if risk and not risk.payload.get("allowed", True):
                 why = "; ".join(risk.payload.get("blockers", [])) or "risk gate"
