@@ -130,20 +130,56 @@ def cmd_levels(args) -> int:
     Run from a schedule. A level fires once (the ledger keys on level+side), so
     a 15-minute cron does not repeat itself while the price sits past a level.
     The proximity warning has its own key, so a level can warn and then fire.
+
+    `--hold` turns the pass into a long watch instead: it re-checks every
+    `--every` seconds until `--hold` elapses. That is what makes the alert robust
+    against the scheduler rather than dependent on it. GitHub's `schedule` is
+    best-effort and, on this repository, has fired a handful of times in a day
+    against a 15-minute cron -- so an alert that needs every slot to fire is an
+    alert that mostly does not arrive. One long run covers the same hours with
+    one job, and the ledger still sends each signal once.
     """
+    import time
+
     from .levels import watch_once
 
     s = _settings(args)
     symbol = args.symbol or s.symbol
     within = getattr(args, "within", 12.0)
-    out = watch_once(s, symbol=symbol, within=within)
-    print(f"live {out['live']:,.2f} · crossed {len(out['crossed'])} of {out['total']} "
-          f"levels · alerted {len(out['alerted'])} · near {len(out['near'])} · "
-          f"warned {len(out['warned'])}")
-    for label in out["crossed"]:
-        print(f"  ▲ {label}")
-    for label, dist in out["near"]:
-        print(f"  ~ {label}  ({dist:,.1f} away)")
+    hold = float(getattr(args, "hold", 0) or 0)
+    every = max(10.0, float(getattr(args, "every", 60) or 60))
+
+    def report(out: dict) -> None:
+        print(f"live {out['live']:,.2f} · crossed {len(out['crossed'])} of {out['total']} "
+              f"levels · alerted {len(out['alerted'])} · near {len(out['near'])} · "
+              f"warned {len(out['warned'])}", flush=True)
+        for label in out["crossed"]:
+            print(f"  ▲ {label}", flush=True)
+        for label, dist in out["near"]:
+            print(f"  ~ {label}  ({dist:,.1f} away)", flush=True)
+
+    if hold <= 0:
+        report(watch_once(s, symbol=symbol, within=within))
+        return 0
+
+    started = time.time()
+    checks = 0
+    sent = 0
+    while time.time() - started < hold:
+        try:
+            out = watch_once(s, symbol=symbol, within=within)
+            checks += 1
+            sent += len(out["alerted"]) + len(out["warned"])
+            report(out)
+        except Exception as exc:  # noqa: BLE001 - one bad tick must not end the watch
+            print(f"  ! check failed: {exc.__class__.__name__}", flush=True)
+        # Sleep in small steps so the job stops near its deadline, not `every`
+        # seconds past it.
+        deadline = min(time.time() + every, started + hold)
+        while time.time() < deadline:
+            time.sleep(min(5.0, deadline - time.time()))
+    print(f"held {time.time() - started:,.0f}s · {checks} checks · {sent} signals sent",
+          flush=True)
     return 0
 
 
@@ -407,8 +443,13 @@ def main(argv=None) -> int:
     ld.set_defaults(func=cmd_longdata)
 
     lv = sub.add_parser("levels", help="alert once when price crosses or nears a watched level")
+    lv.add_argument("--symbol", default=None)
     lv.add_argument("--within", type=float, default=12.0,
                     help="points band for the early 'approaching' warning (default 12)")
+    lv.add_argument("--hold", type=float, default=0,
+                    help="keep watching for this many seconds instead of one pass")
+    lv.add_argument("--every", type=float, default=60,
+                    help="seconds between checks while holding (default 60)")
     lv.set_defaults(func=cmd_levels)
 
     sn = sub.add_parser("scenarios",

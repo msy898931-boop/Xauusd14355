@@ -38,6 +38,10 @@ on:
         description: "Send the conditional scenarios to the chat"
         type: boolean
         default: false
+      level_hold_seconds:
+        description: "How long the level watch should hold, in seconds (default 600)"
+        type: number
+        default: 600
 
 # Never let two passes overlap: the second would race the first on the ledger.
 concurrency:
@@ -50,7 +54,10 @@ permissions:
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The level watch holds across the cron window (and, on a manual dispatch,
+    # for hours), so the job ceiling must clear the longest hold we allow, not
+    # the 15-minute schedule. GitHub-hosted runners cap at 360 minutes.
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -103,12 +110,23 @@ jobs:
       # built around. The orchestrator can say "no trade" for weeks while price
       # sits between a trigger and a stop, and the moment one side is decided is
       # still worth a message. Each level fires once (the ledger keys on
-      # level+side), so a 15-minute cron does not repeat itself.
+      # level+side), so re-checking does not repeat itself.
+      #
+      # It HOLDS for most of the cron window rather than checking once and
+      # exiting. GitHub's `schedule` is best-effort, and on this repository it has
+      # fired a few times a day against a 15-minute cron -- an alert that needs
+      # every slot to fire is one that mostly does not arrive. Holding for 13 of
+      # the 15 minutes means a level touched at any point in the hour is seen,
+      # even when the next two slots are dropped, and it costs the same one job.
+      # The check itself is a keyless quote fetch, so 13 minutes of it is cheap.
       - name: Level alerts
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python3 -m desk.cli levels
+        # 10 minutes = 600s by default, leaving headroom under the 15-minute cron
+        # so a run ends before the next is due (concurrency would drop the one
+        # behind it). A manual dispatch may hold for hours.
+        run: python3 -m desk.cli levels --hold ${{ inputs.level_hold_seconds || 600 }} --every 60
 
       # Optional: proves the alert path end to end on demand, because a silent
       # watch pass cannot tell "not configured" from "no signal yet". The
