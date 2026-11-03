@@ -91,3 +91,18 @@ Coinbase fallback), **~0.2% premium** which is a *level* bug, not a label bug:
 `anchor_series_to_spot()` rescales before indicators, disclosed, never silent.
 The in-process rate limit / error log are per-process → `--workers 1`.
 Detail → `ANALYSISDESK.md`.
+
+## marketdesk: the always-on daemon (2026-11-02)
+⭐ **"Always-on" and "instant" are different promises.** Telegram was two loops
+that never spoke (`serve` = market only; `bot --listen` = chat only) because a
+GitHub runner is a fresh VM and nothing stays resident — the bot was awake ~33%
+of the time. `desk daemon` (`desk/daemon.py`) is ONE process, three cadences:
+chat long-polled (~1s reply), levels every 10s, a reading every 15m. The feed is
+*polled HTTP*, so the finest honest cadence is the level interval — never promise
+tick-instant on a polled feed. The market closes Fri 21:00 → Sun 22:00 UTC, so
+"never sleeps" has a hole: market jobs stand down, the chat keeps serving.
+A daemon must outlive its failures — catch every job (a rejected token backs off,
+it must not kill the process). Cadence clocks start at `-inf`, not 0, or the first
+tick runs nothing. A container needs a volume at `DESK_HOME` or it re-sends alerts
+it already sent. Free Render has no worker/disk (~$7/mo for always-on).
+Detail → `2026-11-02.md`.
