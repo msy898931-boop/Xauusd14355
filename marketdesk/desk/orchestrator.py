@@ -219,9 +219,16 @@ class Orchestrator:
         sup = (levels.payload.get("supports") if levels else []) or []
         res = (levels.payload.get("resistances") if levels else []) or []
         stop_dist = atr1h * 1.5 if atr1h else (px * 0.01)
+        # The nearest structural level is almost always too close to be a real
+        # stop -- the same mistake as picking a target by the nearest level. A
+        # stop that sits inside one ATR is noise, not protection, and it makes
+        # the R:R look better than the trade is. So clear the level by half an
+        # ATR and floor the risk at one ATR, whatever the structure says.
+        atr = atr1h or px * 0.01
         if verdict == "long":
             entry = px
-            stop = round((sup[0]["level"] if sup else px - stop_dist) - (atr1h or 0) * 0.3, 2)
+            struct = sup[0]["level"] if sup else px - stop_dist
+            stop = round(min(struct - atr * 0.5, px - atr), 2)
             plan["entry"] = round(entry, 2)
             plan["stop"] = stop
             plan["targets"] = _pick_targets(res, entry, stop, self.settings.min_rr, above=True)
@@ -231,7 +238,8 @@ class Orchestrator:
                 plan["targets"] = [{"level": round(px + stop_dist * 2, 2), "kind": "projection"}]
         else:
             entry = px
-            stop = round((res[0]["level"] if res else px + stop_dist) + (atr1h or 0) * 0.3, 2)
+            struct = res[0]["level"] if res else px + stop_dist
+            stop = round(max(struct + atr * 0.5, px + atr), 2)
             plan["entry"] = round(entry, 2)
             plan["stop"] = stop
             plan["targets"] = _pick_targets(sup, entry, stop, self.settings.min_rr, above=False)

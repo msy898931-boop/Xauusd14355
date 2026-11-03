@@ -1393,3 +1393,43 @@ def test_bot_confirms_so_a_backlog_is_not_answered_twice(tmp_path, monkeypatch):
     second = bot.poll(max_replies=5)
     assert second["updates"] == 0               # nothing left to answer
     assert len(sent) == 5                       # and no duplicate replies
+
+
+def _levels(supports, resistances):
+    return type("L", (), {"payload": {"supports": supports, "resistances": resistances}})()
+
+
+def test_stop_is_at_least_one_atr_and_clears_the_level(tmp_path):
+    """A stop inside the noise is not a stop, and it inflates the R:R.
+
+    Observed live: the short put its stop 6.49 above entry while the 1h ATR was
+    15.31 -- 0.42 ATR -- because it hung the stop on the nearest resistance (2
+    points away) plus a small cushion. The plan then reported R:R 3.60, which
+    looked good only because the risk was understated.
+    """
+    from desk.orchestrator import Orchestrator
+    orch = Orchestrator(_settings(tmp_path))
+    levels = _levels([{"level": 3880.0, "kind": "pivot"}],
+                     [{"level": 3923.97, "kind": "pivot"}])
+    plan = orch._plan("short", 3922.07, 15.31, levels, None, {}, -0.47)
+    risk = abs(plan["stop"] - plan["entry"])   # a short risks the stop above
+    assert risk >= 15.31 - 0.01, f"stop only {risk:.2f} away, inside one ATR"
+    assert plan["stop"] > 3923.97 + 15.31 * 0.5, "stop must clear the level it hides behind"
+    # The wider stop must still be paid for by a real target, not a near one.
+    assert plan["rr"] is not None and plan["rr"] >= 1.5
+
+
+def test_a_real_stop_makes_a_near_target_unpayable(tmp_path):
+    """The live numbers, honestly graded: the nearest support was 5 points away.
+
+    With the stop floored at one ATR the risk is ~20, so a 5-point reward cannot
+    pay for it. The desk must then state no plan rather than print R:R 3.60 off
+    a stop that the noise would have taken out.
+    """
+    from desk.orchestrator import Orchestrator
+    orch = Orchestrator(_settings(tmp_path))
+    levels = _levels([{"level": 3916.98, "kind": "pivot"}],
+                     [{"level": 3923.97, "kind": "pivot"}])
+    plan = orch._plan("short", 3922.07, 15.31, levels, None, {}, -0.47)
+    assert plan["entry"] is None and plan["stop"] is None
+    assert "reward:risk" in plan["levels_note"]

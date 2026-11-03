@@ -120,7 +120,16 @@ python3 -m ruff check .             # lint
     answered, the older ones are confirmed and acknowledged in the first reply
     with a count. Both extremes are wrong: silence loses the request, and a
     burst of 18 replies is unreadable.
-27. **Reading an update does not confirm it.** The Bot API confirms an update
+27. **A stop inside the noise is not a stop — and it inflates the R:R.** The
+    plan hung its stop on the *nearest* resistance plus a 0.3-ATR cushion. Live,
+    that was 6.49 above entry while the 1h ATR was 15.31 -- **0.42 ATR**, inside
+    ordinary noise -- and the plan then printed **R:R 3.60**. The ratio looked
+    good only because the risk was understated. The stop now clears the level by
+    half an ATR and is floored at one ATR, whatever the structure says. The same
+    live setup, re-run, now says **no trade**: a 5-point reward cannot pay for a
+    20-point risk. That is the honest answer, and it is the same lesson as the
+    nearest-level targets -- **the metric, not the code, was lying.**
+28. **Reading an update does not confirm it.** The Bot API confirms an update
     only when a LATER `getUpdates` passes a higher offset -- there is no separate
     "ack". A scheduled run makes exactly one call, so without a second
     confirming call *nothing is ever confirmed* and every pass re-answers the
