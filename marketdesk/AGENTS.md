@@ -128,6 +128,12 @@ python3 -m ruff check .             # lint
     kind, not by name, so a future non-directional agent cannot silently become
     a permanent bias. **A "neutral" score that is only ever negative is a bias
     with a disclaimer.**
+25b. **A bar still forming is not a fact.** `load_daily` hardcoded
+    `isOpen: False`, so the backtest graded trades against the live, still-moving
+    last bar -- whose high/low/close change with the tick. That invents touches
+    that may never have happened, and it is the same look-at-the-partial-bar
+    mistake the desk fixed once already, in a new place. The flag is now carried
+    through from the CSV and the walk drops the open bar before grading.
 26. **A backtest that reuses the live store reads the future.** `save_candles`
     upserts and never deletes, so a store that held bars from a previous pass
     still holds them -- including bars *after* the one being decided. The first
