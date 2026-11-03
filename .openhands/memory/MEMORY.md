@@ -817,6 +817,18 @@ Across warmups 60–300: meanR +0.13..+0.24, **every 95% CI spans zero** (t≤1.
 direction hit 55% on 235 (z=1.6). Sign flips with horizon; long 36%/-0.32R vs
 short 52%/+0.48R on samples too small to separate. Scope: news+correlation
 neutral (no historical feed), only 1d has history — a floor, not the whole desk.
+⭐⭐⭐⭐ **A positive expectancy on one sample is not an edge — test it against
+constants.** The desk scored +0.37R, but it was short on **60% of a window where
+gold rose 18%**. Replaying its own decisions with the direction replaced:
+`always short +0.374R` == `desk +0.371R`; paired diff **-0.003R, t=-0.02, CI
+[-0.249,+0.244]**. A constant wins in **all three regime thirds**, and a
+**two-line EMA20/EMA50 scores +0.315R vs the desk's +0.371R**. So the agents add
+nothing separable; it was a regime, not a method. **Every backtest result must be
+printed with (a) a constant-direction control, (b) a regime split, (c) a trivial
+benchmark.** Fifth time here that the number lied — first time it was mine.
+⭐ **Measure excursions only up to the exit.** The first pass measured MFE over
+the whole window *even after the stop was hit*, flattering every exit rule.
+Replay bar by bar and check the stop first.
 **Gates:** `pyproject.toml` + `marketdesk-ci.yml` run pytest/mypy/ruff on every
 push and PR. Coverage 84%; `sources/biquote.py` 36% (the only network module).
 **The repo is PUBLIC, has no licence, and tracks `biquote/*.csv`** (biquote's
