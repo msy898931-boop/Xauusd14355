@@ -829,6 +829,22 @@ benchmark.** Fifth time here that the number lied — first time it was mine.
 ⭐ **Measure excursions only up to the exit.** The first pass measured MFE over
 the whole window *even after the stop was hit*, flattering every exit rule.
 Replay bar by bar and check the stop first.
+⭐⭐⭐⭐ **A long-biased signal in an uptrend must beat the DRIFT, not just the
+desk.** "always long" scored +0.283R on 20 months of gold. Paired on the same
+bars, `ema20>ema50 - always_long = +0.249R (t=+3.83)` and `price>ma50 - always_long
+= +0.235R (t=+3.40)` — both clear a Bonferroni bar for 5 families (|t|>2.58) and
+hold in a 70/30 split. **The first result in this project to survive a control.**
+But it is ONE sample of ONE market, and on the desk's own 184 bars trend
+(+0.621R) is only *ahead* of the desk (+0.522R), not provably ahead (t=1.26).
+⭐⭐ **A "neutral" score that is only ever negative is a bias with a disclaimer.**
+`volatility` returned -0.2 on high vol while its own comment said it is not
+directional: bear 46.2%, bull 0.0% over 379 decisions. Skip non-directional
+agents **by `kind`**, not by name.
+⭐ **A stop/target grid is not where a missing edge hides.** 25 cells, each with
+constants + regime split: none survived. `stop 1.0/tgt 1.0` gave desk +0.185 ==
+constant-short +0.185 exactly.
+⭐ **biquote caps at 500 daily bars (~20 months)** regardless of `limit=`
+(2000/5000/10000 all returned 500). 4h=181, 1h=169. There is no more history.
 **Gates:** `pyproject.toml` + `marketdesk-ci.yml` run pytest/mypy/ruff on every
 push and PR. Coverage 84%; `sources/biquote.py` 36% (the only network module).
 **The repo is PUBLIC, has no licence, and tracks `biquote/*.csv`** (biquote's
