@@ -150,3 +150,18 @@ a public repo (5-min cadence vs a 15-min sleep window = three chances).
 Bandwidth: Hobby dropped to **5 GB/mo** (Apr 2026); marketdesk needs ~0.6 GB.
 **marketdesk is NOT deployed to Render** — `render.yaml` existing ≠ deployed.
 Detail → `2026-11-02.md`.
+
+## GitHub Actions cron is best-effort — and a dropped tick looks healthy (2026-11-03)
+⭐ On this repo a `*/5` cron produced **2 scheduled runs in ~17 h** while every
+`workflow_dispatch` succeeded. GitHub docs: `schedule` is delayed under load and
+"some queued jobs may be dropped"; **`:00` is the most congested slot and moving
+off it is the only knob**. Offset every cron (`2-59/5`, `7-59/15`). This does
+**not** make cron reliable — for a hard cadence, an external scheduler must call
+`workflow_dispatch`. ⭐ **A dropped tick is an absence, not an error: nothing goes
+red.** Compare `created_at` against expected slots via the Actions API.
+⭐ **A dependency change must be verified in a CLEAN venv** — my pyyaml guard
+tests passed locally (pyyaml present) and broke CI (installed `.[dev]`, no
+pyyaml). ⭐ **Render response header `x-render-routing` names the real state:**
+`suspend-by-user` = suspended by owner (503), `no-server` = no such service (404).
+The live service is named **`marketdesk`**, not the blueprint's `marketdesk-daemon`.
+Detail → `2026-11-02.md`.
