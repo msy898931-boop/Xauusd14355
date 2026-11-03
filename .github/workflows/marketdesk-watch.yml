@@ -47,9 +47,16 @@ on:
         type: number
         default: 600
 
-# Never let two passes overlap: the second would race the first on the ledger.
+# Two passes must not overlap when they would both mutate the ledger and the
+# SQLite store -- but a GLOBAL group was worse than the race it prevented. A
+# 3-hour level hold monopolised the group, so a dispatch asking for a read sat
+# queued behind it for over an hour and read as "the desk is broken" to the
+# person who asked. The group is now keyed on the event and the hold length, so
+# a long hold cannot block a read. Worst case of an overlap is a duplicate alert,
+# which the ledger already tolerates: a cache key is unique per run, so each run
+# gets its own copy of the store and no write can be corrupted by a neighbour.
 concurrency:
-  group: marketdesk-watch
+  group: marketdesk-watch-${{ github.event_name }}-${{ github.event.inputs.level_hold_seconds || 'sched' }}
   cancel-in-progress: false
 
 permissions:
