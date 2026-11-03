@@ -2221,17 +2221,23 @@ def test_the_menu_has_no_duplicate_and_fits_a_phone():
 
 def test_approaching_finds_a_near_level_and_ignores_a_broken_one():
     """The warning is about a level NOT yet broken; a broken level is the other
-    signal and must not be reported twice."""
-    from desk.levels import DEFAULT_LEVELS, approaching, triggered
+    signal and must not be reported twice.
+
+    The list is built here rather than read from DEFAULT_LEVELS: the test is of
+    the mechanism, so editing the live plan must not break it.
+    """
+    from desk.levels import Level, approaching, triggered
+
+    levels = (Level(3912.0, "top", "above", ""), Level(3897.0, "bottom", "below", ""))
 
     # 3905 sits inside the 12-point band of the 3912 level (above) and the 3897
     # level (below) without breaking either
-    near = dict((lv.price, d) for lv, d in approaching(3905.0, DEFAULT_LEVELS, within=12.0))
+    near = dict((lv.price, d) for lv, d in approaching(3905.0, levels, within=12.0))
     assert 3912.0 in near and 3897.0 in near
-    assert triggered(3905.0, DEFAULT_LEVELS) == []
+    assert triggered(3905.0, levels) == []
     # a price past the level is a break, not a warning
-    assert 3912.0 not in [lv.price for lv, _ in approaching(3920.0, DEFAULT_LEVELS)]
-    assert triggered(3920.0, DEFAULT_LEVELS)
+    assert 3912.0 not in [lv.price for lv, _ in approaching(3920.0, levels)]
+    assert triggered(3920.0, levels)
 
 
 def test_near_and_broken_have_different_ledger_keys():
@@ -2429,3 +2435,106 @@ def test_news_says_so_when_nothing_is_about_gold(tmp_path, monkeypatch):
     assert st.payload["dropped_irrelevant"] == 2
     assert st.payload["headlines"] == []
     assert "ما في عنوان يخصّ الذهب" in st.summary
+
+
+# ---- scenarios --------------------------------------------------------
+
+def _frame(n=120, start=3900.0, step=1.0):
+    """Closed bars in the agent `frames_data` shape (o/h/l/c/open)."""
+    out = []
+    for i in range(n):
+        c = start + i * step
+        out.append({"t": f"2026-01-01T{i:02d}:00:00Z", "o": c - 1, "h": c + 2,
+                    "l": c - 2, "c": c, "open": False})
+    return out
+
+
+def _wave_frame(n=160, period=20, amp=40.0, base=3900.0):
+    """A wave in the frame shape. A monotonic series prints no pivots at all
+    (its extreme is always the next bar), so a wave is what exercises levels."""
+    import math
+    out = []
+    for i in range(n):
+        c = base + amp * math.sin(2 * math.pi * i / period)
+        out.append({"t": f"2026-01-01T{i:02d}:00:00Z", "o": c - 1, "h": c + 2,
+                    "l": c - 2, "c": c, "open": False})
+    return out
+
+
+def test_scenarios_use_printed_levels_and_a_measured_stop():
+    """A scenario's trigger is a level the market printed and its stop is that
+    frame's ATR — never an invented number."""
+    import datetime as dt
+
+    from desk import scenarios as S
+
+    frames = {"1h": _wave_frame(base=3960.0), "4h": _wave_frame(base=3950.0),
+              "1d": _wave_frame(base=3940.0)}
+    sc = S.build(frames, 3960.0, calendar=[], now=dt.datetime(2026, 11, 3, tzinfo=dt.UTC))
+    assert sc["scenarios"], "a wave must print levels"
+    for s in sc["scenarios"]:
+        assert s["side"] in ("long", "short")
+        # a long's stop is below its trigger; a short's is above
+        if s["side"] == "long":
+            assert s["stop"] < s["trigger"] < s["targets"][0]
+        else:
+            assert s["targets"][0] < s["trigger"] < s["stop"]
+        assert s["risk"] > 0 and s["rr"] is not None
+
+
+def test_scenarios_ignore_a_level_that_is_the_price_itself():
+    """A pivot sitting on the live price is not a decision point; a stop measured
+    from it would be a whole frame ATR of nonsense."""
+    import datetime as dt
+
+    from desk import scenarios as S
+
+    frames = {"1h": _wave_frame(base=3200.0, amp=100.0)}
+    live = 3200.0
+    sc = S.build(frames, live, calendar=[], now=dt.datetime(2026, 11, 3, tzinfo=dt.UTC))
+    for s in sc["scenarios"]:
+        assert abs(s["trigger"] - live) >= 1.0
+
+
+def test_scenarios_report_the_next_high_impact_event_only():
+    """The event line names the nearest high-impact release inside the window, and
+    a low-impact or far-away row is not it."""
+    import datetime as dt
+
+    from desk import scenarios as S
+
+    now = dt.datetime(2026, 11, 3, 12, 0, tzinfo=dt.UTC)
+    cal = [
+        {"time": "2026-11-03T16:00:00Z", "currency": "USD", "name": "JOLTS Job Openings",
+         "importance": "high", "forecast": 6.7, "previous": 7.0},
+        {"time": "2026-11-03T13:00:00Z", "currency": "USD", "name": "Minor Thing",
+         "importance": "low", "forecast": None, "previous": None},
+        {"time": "2026-11-09T13:00:00Z", "currency": "USD", "name": "Too Far",
+         "importance": "high", "forecast": None, "previous": None},
+    ]
+    sc = S.build({"1h": _wave_frame()}, 3960.0, calendar=cal, now=now, window_h=6.0)
+    assert sc["event"] is not None
+    assert sc["event"]["name"] == "فرص العمل (JOLTS)"     # translated
+    assert sc["event"]["currency"] == "USD"
+    assert 3.9 < sc["event"]["hours"] < 4.1
+
+
+def test_scenarios_say_so_when_there_is_nothing_to_build_on():
+    """No printed levels is stated, not filled with an invented price."""
+    from desk import scenarios as S
+
+    sc = S.build({}, 3970.0, calendar=[])
+    assert sc["scenarios"] == []
+    assert sc["note"]
+    assert "لا توجد مستويات" in S.render(sc)
+
+
+def test_scenario_render_is_telegram_html():
+    """The render must escape nothing it did not build: every level it prints is a
+    number the desk computed, so a `<` can never reach Telegram as an entity."""
+    from desk import scenarios as S
+
+    sc = S.build({"1h": _frame(), "1d": _frame(start=3880.0)}, 3970.0, calendar=[])
+    text = S.render(sc)
+    assert "<b>" in text and "</b>" in text
+    assert "&lt;" not in text

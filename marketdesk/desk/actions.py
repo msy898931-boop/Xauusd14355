@@ -78,7 +78,7 @@ class Actions:
     # are plain text -- a study summary can contain `&` -- and are escaped as
     # one block, because a raw `&` makes Telegram reject the whole message.
     MARKUP_ACTIONS = ("recommend", "market", "plan", "levels", "help", "menu",
-                      "chart")
+                      "chart", "scenarios")
 
     def __init__(self, settings: Settings, orchestrator=None):
         self.settings = settings
@@ -97,10 +97,11 @@ class Actions:
                 "اختر من الأزرار 👇\n"
                 "\n"
                 "📊 تحليل الآن · 🎯 التوصية\n"
-                "📈 الخطة الكاملة · 📉 الشارت\n"
-                "⏱️ السوق · 🔔 المستويات\n"
-                "📚 دراسة الذهب · 📋 آخر تقرير\n"
-                "📈 معدل النجاح · ❓ مساعدة\n"
+                "🎬 السيناريوهات · 📈 الخطة الكاملة\n"
+                "📉 الشارت · ⏱️ السوق\n"
+                "🔔 المستويات · 📚 دراسة الذهب\n"
+                "📋 آخر تقرير · 📈 معدل النجاح\n"
+                "❓ مساعدة\n"
                 "\n"
                 "<i>كل ردّ معه زر «🔄 تحديث» و«🏠 القائمة».</i>")
 
@@ -113,6 +114,7 @@ class Actions:
             "hitrate": self.hitrate,
             "plan": self.plan,
             "levels": self.levels,
+            "scenarios": self.scenarios,
             "gold": self.gold,
             "chart": self.chart,
             "help": self.help,
@@ -244,6 +246,31 @@ class Actions:
         else:
             lines.append("<i>ولا مستوى منكسر أو قريب — السعر بين المستويات.</i>")
         return "\n".join(lines)
+
+    def scenarios(self) -> str:
+        """Conditional scenarios from printed levels, ATR, and the calendar.
+
+        Read-only over what a run already stored: it loads the closed frames and
+        the calendar from shared memory and computes the levels itself. It does
+        not start the agents or call the model, so pressing it is cheap.
+        """
+        from . import scenarios as S
+
+        quote, err = self._quote_or_none()
+        if not quote:
+            return f"🎯 تعذّر قراءة السعر: {_e(err or 'لا توجد تسعيرة')}"
+        live = float(quote["mid"])
+
+        frames: dict[str, list[dict]] = {}
+        for tf in self.settings.timeframes:
+            rows = self.shared.load_candles(self.settings.symbol, tf)
+            frames[tf] = [{"t": r["open_time"], "o": r["open"], "h": r["high"],
+                           "l": r["low"], "c": r["close"], "open": bool(r["is_open"])}
+                          for r in rows]
+        cal = self.shared.load_calendar()
+        sc = S.build(frames, live, cal, window_h=self.settings.event_window_h,
+                     symbol=self.settings.symbol)
+        return S.render(sc)
 
     def gold(self) -> str:
         """The 10-year study: this state, and what followed it before."""

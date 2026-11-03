@@ -176,6 +176,28 @@ def cmd_levels(args) -> int:
     return 0
 
 
+def cmd_scenarios(args) -> int:
+    """Send the conditional scenarios to the chat (or print them).
+
+    Reads what a run already stored — the closed frames and the calendar — and
+    computes the levels itself. It starts no agent and calls no model, so it is
+    cheap enough to run on a schedule.
+    """
+    from .actions import Actions
+
+    s = _settings(args)
+    text = Actions(s).scenarios()
+    if getattr(args, "send", False):
+        from .notify import Notifier
+
+        n = Notifier(s)
+        ok = n.send(text)
+        print(f"scenarios sent: {ok}")
+        return 0 if ok else 1
+    print(text)
+    return 0
+
+
 def cmd_plan(args) -> int:
     """The live two-sided plan: where to act and where to get out, with evidence.
 
@@ -417,6 +439,13 @@ def main(argv=None) -> int:
     lv.add_argument("--within", type=float, default=12.0,
                     help="points band for the early 'approaching' warning (default 12)")
     lv.set_defaults(func=cmd_levels)
+
+    sn = sub.add_parser("scenarios",
+                        help="conditional scenarios from printed levels + the calendar")
+    sn.add_argument("--symbol", default=None)
+    sn.add_argument("--send", action="store_true",
+                    help="deliver to the chat instead of printing")
+    sn.set_defaults(func=cmd_scenarios)
 
     pl = sub.add_parser("plan", help="live two-sided plan with stop and target ladder")
     pl.add_argument("--csv", default="../biquote/XAUUSD_1d.csv")

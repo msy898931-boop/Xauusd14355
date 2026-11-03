@@ -50,14 +50,15 @@ class TelegramError(RuntimeError):
     """
 
 # The menu, in reading order: act first, then read, then the reference tools.
-# Two per row keeps it legible on a phone; nine buttons is the most that fits
+# Two per row keeps it legible on a phone; eleven buttons is the most that fits
 # above the fold without scrolling.
 MENU: list[list[tuple[str, str]]] = [
     [("📊 تحليل الآن", "analysis"), ("🎯 التوصية", "recommend")],
-    [("📈 الخطة الكاملة", "plan"), ("📉 الشارت", "chart")],
-    [("⏱️ السوق", "market"), ("🔔 المستويات", "levels")],
-    [("📚 دراسة الذهب", "gold"), ("📋 آخر تقرير", "report")],
-    [("📈 معدل النجاح", "hitrate"), ("❓ مساعدة", "help")],
+    [("🎬 السيناريوهات", "scenarios"), ("📈 الخطة الكاملة", "plan")],
+    [("📉 الشارت", "chart"), ("⏱️ السوق", "market")],
+    [("🔔 المستويات", "levels"), ("📚 دراسة الذهب", "gold")],
+    [("📋 آخر تقرير", "report"), ("📈 معدل النجاح", "hitrate")],
+    [("❓ مساعدة", "help")],
 ]
 
 # Plain text a person types, mapped to the same actions the buttons use. A
@@ -69,9 +70,11 @@ TEXT_ACTIONS: dict[str, str] = {
     "/analysis": "analysis", "/recommend": "recommend", "/report": "report",
     "/market": "market", "/hitrate": "hitrate", "/plan": "plan",
     "/levels": "levels", "/gold": "gold", "/chart": "chart",
+    "/scenarios": "scenarios",
     "تحليل": "analysis", "توصية": "recommend", "تقرير": "report",
     "سوق": "market", "نجاح": "hitrate", "خطة": "plan", "مستويات": "levels",
     "ذهب": "gold", "شارت": "chart", "رسم": "chart", "قائمة": "menu",
+    "سيناريو": "scenarios", "سيناريوهات": "scenarios", "احتمالات": "scenarios",
     "مساعدة": "help", "رجوع": "menu",
 }
 

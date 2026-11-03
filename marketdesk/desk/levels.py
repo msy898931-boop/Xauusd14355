@@ -25,14 +25,22 @@ class Level:
 
 # The levels the live plan is built around. Edit this list as the plan changes;
 # nothing else needs to move.
+#
+# Refreshed 2026-11-03 (price 3,961). The previous set was written when gold sat
+# near 3,900 and had been stale for days: every entry was *below* the market, so
+# `triggered` fired on all of them at once and the alerts were noise. Levels are
+# a statement about the current market, so they must be re-stated when it moves.
 DEFAULT_LEVELS = (
-    Level(3931.0, "كسر 4 ساعات صعود", "above",
-          "الصعود تأكد — الطريق لـ3,946 ثم 3,964"),
-    Level(3912.0, "وقف البيع", "above",
-          "إغلاق فوقه = إلغاء البيع فوراً — اطلع"),
-    Level(3897.0, "قاع اليوم", "below",
-          "كسر القاع — سيناريو الهبوط يتفعّل، الطريق لـ3,870"),
-    Level(3870.0, "القاع الكبير", "below", "هبوط أعمق — الطريق لـ3,850 ثم 3,820"),
+    Level(3970.5, "الخط الفاصل", "above",
+          "إغلاق فوقه = الصعود تأكد — الطريق لـ4,030 ثم 4,083"),
+    Level(3964.6, "مقاومة الساعة", "above",
+          "أول مقاومة — فوقها يفتح الباب للخط الفاصل"),
+    Level(3937.5, "دعم الساعة", "below",
+          "كسره = الهبوط يتفعّل — الطريق لـ3,895"),
+    Level(3895.0, "قاع الساعة", "below",
+          "تحته الطريق مفتوح لـ3,870 (القاع الكبير)"),
+    Level(3870.0, "القاع الكبير", "below",
+          "كسر القاع الكبير — الطريق لـ3,850 ثم 3,820"),
 )
 
 

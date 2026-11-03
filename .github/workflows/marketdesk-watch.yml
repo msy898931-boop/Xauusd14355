@@ -34,6 +34,10 @@ on:
         description: "Send a real Telegram test message (proves the alert path)"
         type: boolean
         default: false
+      send_scenarios:
+        description: "Send the conditional scenarios to the chat"
+        type: boolean
+        default: false
 
 # Never let two passes overlap: the second would race the first on the ledger.
 concurrency:
@@ -116,3 +120,13 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: python3 -m desk.cli check-alerts --send
+
+      # Optional: the conditional scenarios, computed from the levels this pass
+      # just stored. Runs AFTER the watch pass so it reads fresh candles, and
+      # needs no model — the numbers are all computed.
+      - name: Send the scenarios
+        if: ${{ inputs.send_scenarios }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 -m desk.cli scenarios --send
