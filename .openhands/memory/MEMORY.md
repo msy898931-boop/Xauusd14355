@@ -788,10 +788,19 @@ moves only on a later call) and the bug becomes a failing test in one run.
 confirms "in the same call that reads it" — the false belief that made the
 missing confirmation look deliberate. When you fix a bug, grep the *prose* that
 justified it.
-⚠ **GitHub `schedule` has never fired on this repo** — 0 `schedule` events on
-all 3 workflows (10 dispatch, 1 push, 1 PR), including the pre-existing watch
-due ~14 times. Not a fork/archived/disabled; `state=active`. Cannot verify
-further (403 on `/actions/permissions`). The desk may not be alerting on its own.
+✅ **GitHub `schedule` DOES work here** — it was only the new-schedule delay.
+By 05:39Z: `schedule: 2`. The watch fired on cron (03:38Z) and the bot fired on
+cron (03:56Z) and **answered a real button press**. End-to-end loop proven.
+**A new GitHub schedule can take hours; no runs yet is not yet evidence of
+breakage.** Check `gh api .../runs --jq '[.workflow_runs[].event]'`.
+⭐ **A stop inside the noise is not a stop — and it inflates the R:R.** The plan
+hung the stop on the *nearest* level + 0.3 ATR. Live that was **0.42 ATR** —
+noise — and it printed **R:R 3.60**. Now floored at 1 ATR, clearing the level by
+half an ATR; the same setup now says **no trade**. Third time here: the metric,
+not the code, was lying.
+⚠ **The desk has ZERO graded runs** — no track record at all. Biggest gap now.
+Data is thin below daily: 1d 500 bars, 4h 181, **1h 169 (~11 days), 15m 193
+(~4 days)**, so only 1d can support a real backtest.
 **Gates:** `pyproject.toml` + `marketdesk-ci.yml` run pytest/mypy/ruff on every
 push and PR. Coverage 84%; `sources/biquote.py` 36% (the only network module).
 **The repo is PUBLIC, has no licence, and tracks `biquote/*.csv`** (biquote's
