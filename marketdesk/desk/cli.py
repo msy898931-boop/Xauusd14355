@@ -72,6 +72,32 @@ def cmd_hitrate(args) -> int:
     return 0
 
 
+def cmd_plan(args) -> int:
+    """The live two-sided plan: where to act and where to get out, with evidence.
+
+    Network by default (a plan without a live quote is stale), but `--offline`
+    reads the shipped CSV so the command still works in a sandbox.
+    """
+    from pathlib import Path
+
+    from .plan import build_plan, format_plan
+
+    symbol = args.symbol or "XAUUSD"
+    if args.offline:
+        from .backtest import load_daily
+        bars = load_daily(Path(args.csv))
+        # No live feed: the reference price is the last CLOSED close, never the
+        # still-forming bar's moving close.
+        closed = [b for b in bars if not b.get("isOpen")]
+        live = closed[-1]["close"]
+    else:
+        from . import sources
+        bars = sources.fetch_candles(symbol, "1d", limit=1000)
+        live = float(sources.fetch_quote(symbol)["mid"])
+    print(format_plan(build_plan(bars, live), symbol=symbol))
+    return 0
+
+
 def cmd_scan(args) -> int:
     """Ask the prior question: is there any edge in the data at all?
 
@@ -256,6 +282,12 @@ def main(argv=None) -> int:
     h = sub.add_parser("hit-rate", help="grade past runs against what price did")
     h.add_argument("--symbol", default=None)
     h.set_defaults(func=cmd_hitrate)
+
+    pl = sub.add_parser("plan", help="live two-sided plan with stop and target ladder")
+    pl.add_argument("--csv", default="../biquote/XAUUSD_1d.csv")
+    pl.add_argument("--offline", action="store_true",
+                    help="read the shipped CSV instead of the live feed")
+    pl.set_defaults(func=cmd_plan)
 
     sc = sub.add_parser("scan", help="test standard signals for any edge at all")
     sc.add_argument("--csv", default="../biquote/XAUUSD_1d.csv",

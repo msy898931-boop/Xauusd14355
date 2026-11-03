@@ -1629,3 +1629,72 @@ def test_backtest_drops_the_still_forming_bar(tmp_path):
     bars = [b for b in load_daily(p) if not b.get("isOpen")]
     assert len(bars) == 199
     assert bars[-1]["isOpen"] is False
+
+
+# ---- plan -------------------------------------------------------------
+
+def _plan_csv(path, n=120, start=3000.0, step=1.0):
+    import csv as _csv
+
+    with path.open("w", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["openTime", "open", "high", "low", "close", "volume",
+                    "tickVolume", "isOpen"])
+        for i in range(n):
+            px = start + i * step
+            w.writerow([f"2025-{(i // 28) % 12 + 1:02d}-{i % 28 + 1:02d}T00:00:00Z",
+                        px, px + 3, px - 3, px, 0, 10,
+                        "True" if i == n - 1 else "False"])
+
+
+def test_plan_builds_both_sides_with_ladder(tmp_path):
+    """The plan must offer a long and a short, each with stop and three rungs."""
+    from desk.plan import build_plan
+
+    p = tmp_path / "XAUUSD_1d.csv"
+    _plan_csv(p)
+    from desk.backtest import load_daily
+
+    bars = load_daily(p)
+    plan = build_plan(bars, live=3100.0)
+    assert plan["long"].trigger > plan["long"].stop
+    assert plan["short"].trigger < plan["short"].stop
+    assert len(plan["long"].targets) == 3 and len(plan["short"].targets) == 3
+    # the long ladder must run up, the short ladder down
+    assert plan["long"].targets == sorted(plan["long"].targets)
+    assert plan["short"].targets == sorted(plan["short"].targets, reverse=True)
+
+
+def test_plan_ignores_the_open_bar(tmp_path):
+    """Levels come from closed bars, so a wild open bar cannot move them."""
+    from desk.backtest import load_daily
+    from desk.plan import build_plan
+
+    p = tmp_path / "XAUUSD_1d.csv"
+    _plan_csv(p)
+    base = build_plan(load_daily(p), live=3100.0)
+
+    p2 = tmp_path / "XAUUSD_2_1d.csv"
+    _plan_csv(p2)
+    rows = p2.read_text().rstrip().split("\n")
+    # blow out the final (open) bar's high/low
+    rows[-1] = rows[-1].replace("True", "True").split(",")
+    rows[-1][2] = "99999"
+    rows[-1][3] = "1"
+    p2.write_text("\n".join([",".join(r) if isinstance(r, list) else r for r in rows]))
+    after = build_plan(load_daily(p2), live=3100.0)
+    assert after["prior_high"] == base["prior_high"]
+    assert after["prior_low"] == base["prior_low"]
+
+
+def test_plan_labels_each_side_with_its_evidence(tmp_path):
+    """A side must carry the sample evidence that supports (or not) it."""
+    from desk.backtest import load_daily
+    from desk.plan import build_plan, format_plan
+
+    p = tmp_path / "XAUUSD_1d.csv"
+    _plan_csv(p)
+    out = format_plan(build_plan(load_daily(p), live=3100.0))
+    assert "SUPPORTED" in out
+    assert "NOT SUPPORTED" in out
+    assert "not a promise" in out
