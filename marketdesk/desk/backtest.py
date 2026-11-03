@@ -49,6 +49,7 @@ class Trade:
     result: str          # "target" | "stop" | "open"
     bars: int
     r_multiple: float | None
+    idx: int = -1        # the decision bar, so controls can replay it
 
 
 @dataclass
@@ -60,6 +61,8 @@ class Report:
     trades: list[Trade] = field(default_factory=list)
     bias_hits: dict[str, list[int]] = field(default_factory=dict)
     skipped: dict[str, int] = field(default_factory=dict)
+    bars: list[dict] = field(default_factory=list, repr=False)
+    horizon: int = 10
 
     # ---- summary numbers ------------------------------------------------
     @property
@@ -149,7 +152,7 @@ def run_backtest(csv_path: Path, *, symbol: str = "XAUUSD", warmup: int = 120,
 
 
 def _walk_history(csv_path: Path, bars: list[dict], symbol: str, warmup: int,
-                  horizons: tuple[int, ...], home: Path) -> Report:
+                  horizons: tuple[int, ...], home: Path, horizon: int = 10) -> Report:
     settings = Settings()
     settings.home = home
     settings.timeframes = ("1d",)
@@ -176,6 +179,8 @@ def _walk_history(csv_path: Path, bars: list[dict], symbol: str, warmup: int,
 
     rep = Report(symbol=symbol, bars_total=len(bars), decisions=0, directional=0)
     rep.skipped = {"neutral": 0, "no_plan": 0, "risk_blocked": 0}
+    rep.bars = bars
+    rep.horizon = horizon
 
     for i in range(warmup, len(bars) - 1):
         bar = bars[i]
@@ -230,7 +235,7 @@ def _walk_history(csv_path: Path, bars: list[dict], symbol: str, warmup: int,
         rep.trades.append(Trade(
             when=bar["openTime"], direction=verdict, entry=entry, stop=stop,
             target=targets[0]["level"], rr=rec.get("rr"), result=result,
-            bars=n, r_multiple=r))
+            bars=n, r_multiple=r, idx=i))
     return rep
 
 
@@ -262,9 +267,10 @@ def format_report(rep: Report, *, buy_hold_pct: float | None = None,
         # Expectancy is the verdict, not the hit rate: a high hit rate at a poor
         # R can still lose money, and the reverse.
         if exp is not None:
-            verdict = ("edge" if exp > 0.05 else
+            verdict = ("positive expectancy on this sample" if exp > 0.05 else
                        "no edge" if exp > -0.05 else "losing")
-            lines.append(f"    -> {verdict} on this sample")
+            lines.append(f"    -> {verdict} — but read the controls below before")
+            lines.append("       treating it as a method rather than a regime.")
     lines.append("")
     lines.append("  Desk's implied bias (direction only, flat excluded):")
     for h in sorted(rep.bias_hits):
@@ -277,4 +283,131 @@ def format_report(rep: Report, *, buy_hold_pct: float | None = None,
                   "  (a direction hit rate is not a return; this is the bar the",
                   "   desk has to clear to be worth running at all)"]
     lines += ["", "  Skipped: " + ", ".join(f"{k} {v}" for k, v in rep.skipped.items())]
+    lines.append(controls(rep))
+    lines.append(plain_trend(rep.bars, rep.trades, rep.horizon))
     return "\n".join(x for x in lines if x != "")
+
+
+# ---- controls ---------------------------------------------------------
+#
+# A positive expectancy on one sample is not an edge. The desk was short on 60%
+# of a window in which gold rose 18%, so "always short" scored +0.399R -- 86% of
+# the desk's own +0.466R -- and a two-line EMA20/EMA50 rule scored +0.567R, more
+# than the desk. The direction added nothing measurable over a constant bias.
+#
+# These controls exist so that number can never be read alone. They replay the
+# desk's own decisions with the direction replaced, and they are printed with
+# the result rather than left as an exercise.
+
+
+def _replay(bars: list[dict], t: Trade, long: bool, horizon: int) -> float:
+    """One decision, replayed with a forced direction. Same entry, same risk."""
+    entry, risk = t.entry, abs(t.entry - t.stop)
+    if risk <= 0:
+        return 0.0
+    stop = entry - risk if long else entry + risk
+    target_r = t.rr or 2.0
+    tgt = entry + target_r * risk if long else entry - target_r * risk
+    for b in bars[t.idx + 1:t.idx + 1 + horizon]:
+        if long:
+            if b["low"] <= stop:
+                return -1.0
+            if b["high"] >= tgt:
+                return target_r
+        else:
+            if b["high"] >= stop:
+                return -1.0
+            if b["low"] <= tgt:
+                return target_r
+    end = bars[min(t.idx + horizon, len(bars) - 1)]["close"]
+    return ((end - entry) if long else (entry - end)) / risk
+
+
+def _mean(rs: list[float]) -> float:
+    return sum(rs) / len(rs) if rs else 0.0
+
+
+def controls(rep: Report) -> str:
+    """What the desk's direction adds over a constant, on its own decisions."""
+    bars, h = rep.bars, rep.horizon
+    # Resolved trades only. An unresolved trade has no r_multiple, and counting it
+    # as 0R while the replay marks it to market would compare unlike things.
+    trades = rep.closed
+    if not trades or not bars:
+        return ""
+    desk = _mean([t.r_multiple or 0.0 for t in trades])
+    always_short = _mean([_replay(bars, t, False, h) for t in trades])
+    always_long = _mean([_replay(bars, t, True, h) for t in trades])
+
+    # Paired: the same decisions, desk minus constant. A per-trade difference is
+    # the right unit -- the two share the entry, so their noise cancels.
+    def paired(other):
+        d = [(t.r_multiple or 0.0) - _replay(bars, t, other, h) for t in trades]
+        n = len(d)
+        m = _mean(d)
+        se = (sum((x - m) ** 2 for x in d) / n / (n - 1)) ** 0.5 if n > 1 else 0.0
+        return m, se, (m / se if se else 0.0)
+
+    dm, dse, dt = paired(False)
+
+    # Regime split: a real method beats the winning constant in EACH regime, not
+    # just on the whole sample. A short bias in a fall wins overall and fails
+    # this test.
+    thirds = len(bars) // 3
+    rows = []
+    for lo, hi, lbl in ((0, thirds, "rise"), (thirds, 2 * thirds, "peak"),
+                        (2 * thirds, len(bars), "fall")):
+        grp = [t for t in trades if lo <= t.idx < hi]
+        if len(grp) < 5:
+            continue
+        dr = _mean([t.r_multiple or 0.0 for t in grp])
+        lr = _mean([_replay(bars, t, True, h) for t in grp])
+        sr = _mean([_replay(bars, t, False, h) for t in grp])
+        best = max(lr, sr)
+        rows.append((lbl, len(grp), dr, lr, sr, dr > best))
+
+    lines = ["", "Controls — does the direction add anything over a constant?",
+             f"  desk direction        {desk:+.3f}R",
+             f"  always short          {always_short:+.3f}R",
+             f"  always long           {always_long:+.3f}R",
+             f"  desk minus always-short  {dm:+.3f}R  t={dt:+.2f}"
+             f"  (95% CI {dm - 1.96 * dse:+.3f}..{dm + 1.96 * dse:+.3f})"]
+    if abs(dt) < 1.96:
+        lines.append("  -> the direction is NOT separable from a constant short "
+                     "on this sample.")
+        lines.append("     The expectancy above is a market regime, not a method.")
+    if rows:
+        lines.append("  by regime (a real method beats the constant in each):")
+        for lbl, n, dr, lr, sr, won in rows:
+            lines.append(f"    {lbl:<5} n={n:3} desk={dr:+.3f} long={lr:+.3f} "
+                         f"short={sr:+.3f}  {'desk wins' if won else 'constant wins'}")
+    return "\n".join(lines)
+
+
+def plain_trend(bars: list[dict], all_trades: list[Trade], horizon: int) -> str:
+    """The two-line benchmark: follow EMA20 vs EMA50. If this beats the desk, the
+    eight agents are not paying for themselves."""
+    from . import indicators as ind
+
+    trades = [t for t in all_trades if t.result in ("target", "stop")]
+    closes = [b["close"] for b in bars]
+    e20, e50 = ind.ema(closes, 20), ind.ema(closes, 50)
+    rs = []
+    for t in trades:
+        i = t.idx
+        if i < 0:
+            continue
+        a, b = e20[i], e50[i]
+        if a is None or b is None:
+            continue
+        rs.append(_replay(bars, t, a > b, horizon))
+    if not rs:
+        return ""
+    m = _mean(rs)
+    se = (sum((x - m) ** 2 for x in rs) / len(rs) / (len(rs) - 1)) ** 0.5 if len(rs) > 1 else 0.0
+    desk = _mean([t.r_multiple or 0.0 for t in trades])
+    verdict = ("the desk is not paying for itself" if m > desk
+               else "the desk beats the two-line benchmark")
+    return ("\n  Two-line benchmark: follow EMA20 vs EMA50 on the same entries\n"
+            f"    trend-follow {m:+.3f}R (t={m/se if se else 0:+.2f})   "
+            f"desk {desk:+.3f}R   -> {verdict}")

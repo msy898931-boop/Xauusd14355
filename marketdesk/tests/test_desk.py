@@ -1499,3 +1499,49 @@ def test_backtest_guard_rejects_a_leaked_bar(tmp_path, monkeypatch):
     csv_path = _daily_csv(tmp_path)
     with pytest.raises(AssertionError, match="look-ahead"):
         backtest.run_backtest(csv_path, warmup=60, horizons=(1,))
+
+
+def test_controls_flag_a_direction_that_is_just_a_constant(tmp_path):
+    """A positive expectancy from a one-sided book is a regime, not a method.
+
+    The desk was short on 60% of a window in which gold rose 18%. Its +0.47R was
+    matched by "always short" (+0.40R) and beaten by a two-line EMA rule. The
+    control must say so rather than let the headline number stand alone.
+    """
+    from desk.backtest import Report, Trade, controls
+
+    bars = []
+    for i in range(80):
+        c = 3000.0 - i * 5.0                     # a steady fall
+        bars.append({"openTime": f"2026-01-{i % 28 + 1:02d}T00:00:00Z",
+                     "open": c, "high": c + 2, "low": c - 2, "close": c,
+                     "tickVolume": 1, "isOpen": False})
+    # Every decision is a short with a 2R target, and every one hits.
+    trades = [Trade(when=bars[i]["openTime"], direction="short", entry=bars[i]["close"],
+                    stop=bars[i]["close"] + 10, target=bars[i]["close"] - 20,
+                    rr=2.0, result="target", bars=1, r_multiple=2.0, idx=i)
+              for i in range(0, 60)]
+    rep = Report(symbol="XAUUSD", bars_total=len(bars), decisions=60,
+                 directional=60, trades=trades)
+    rep.bars = bars
+    rep.horizon = 10
+    out = controls(rep)
+    # "always long" loses in a fall, so the short bias explains the whole result.
+    assert "always short" in out
+    assert "always long" in out
+    # The verdict must warn, because a one-sided book cannot show skill.
+    assert "NOT separable" in out or "regime" in out
+
+
+def test_replay_forces_the_direction_it_is_given():
+    """`_replay` is the unit the whole control rests on: it must honour the flag."""
+    from desk.backtest import Trade, _replay
+
+    bars = [{"openTime": "2026-01-01T00:00:00Z", "open": 100.0, "high": 101.0,
+             "low": 99.0, "close": 100.0, "tickVolume": 1, "isOpen": False},
+            {"openTime": "2026-01-02T00:00:00Z", "open": 100.0, "high": 101.0,
+             "low": 95.0, "close": 95.0, "tickVolume": 1, "isOpen": False}]
+    t = Trade(when=bars[0]["openTime"], direction="long", entry=100.0, stop=95.0,
+              target=110.0, rr=2.0, result="stop", bars=1, r_multiple=-1.0, idx=0)
+    assert _replay(bars, t, True, 5) == -1.0      # forced long is stopped out
+    assert _replay(bars, t, False, 5) > 0         # forced short profits

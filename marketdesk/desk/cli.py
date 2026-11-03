@@ -88,7 +88,8 @@ def cmd_backtest(args) -> int:
     if not path.exists():
         print(f"no bars at {path} — pass --csv")
         return 2
-    rep = run_backtest(path, symbol=args.symbol or "XAUUSD", warmup=args.warmup)
+    rep = run_backtest(path, symbol=args.symbol or "XAUUSD", warmup=args.warmup,
+                       horizons=tuple(args.horizons))
     hold = buy_and_hold(load_daily(path), args.warmup)
     print(format_report(rep, buy_hold_pct=hold))
     return 0
@@ -246,6 +247,8 @@ def main(argv=None) -> int:
     bt.add_argument("--csv", default=None, help="daily bars CSV (default: the repo's)")
     bt.add_argument("--warmup", type=int, default=120,
                     help="bars the agents must see before deciding")
+    bt.add_argument("--horizons", type=int, nargs="+", default=[5, 10, 20],
+                    help="grading windows in bars; the longest also caps a plan")
     bt.set_defaults(func=cmd_backtest)
 
     w = sub.add_parser("watch", help="one scheduled pass; alert only if actionable")
