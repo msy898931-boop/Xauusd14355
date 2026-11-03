@@ -2777,3 +2777,132 @@ def test_scenario_render_is_telegram_html():
     text = S.render(sc)
     assert "<b>" in text and "</b>" in text
     assert "&lt;" not in text
+
+
+# ---- the always-on daemon ---------------------------------------------
+#
+# The daemon is the shape a real host wants: the chat, the levels, and the
+# readings in ONE process, on three cadences that do not compete. On a scheduler
+# the desk had to be two loops that never spoke -- `serve` read the market but
+# not the chat, `bot --listen` read the chat for a few minutes but not the
+# market. These pin the scheduling, the failure isolation, and the stand-down.
+
+class _OpenSession:
+    is_open = True
+    reason = "السوق مفتوح"
+    opens_at = None
+
+
+class _ClosedSession:
+    is_open = False
+    reason = "السوق مقفول (السبت) — بيفتح الأحد"
+    opens_at = None
+
+
+def _daemon(tmp_path, monkeypatch, **kw):
+    """A Daemon whose jobs are recorders, never the network."""
+    from desk.daemon import Daemon
+
+    d = Daemon(_settings(tmp_path), **kw)
+    seen: dict[str, list] = {"levels": [], "read": []}
+
+    def fake_levels(settings, **k):
+        seen["levels"].append(1)
+        return {"live": 3970.0, "alerted": [], "warned": []}
+
+    def fake_read(notifier=None):
+        seen["read"].append(1)
+        return {"verdict": "no-trade", "score": 0.0, "alerted": False,
+                "reason": "no directional call"}
+
+    monkeypatch.setattr("desk.levels.watch_once", fake_levels)
+    monkeypatch.setattr(d.orchestrator, "watch_once", fake_read)
+    monkeypatch.setattr("desk.daemon.market_session", lambda now=None: _OpenSession())
+    return d, seen
+
+
+def test_daemon_runs_both_jobs_on_the_first_tick(tmp_path, monkeypatch):
+    """A fresh process must read the market immediately, not sit idle for a full
+    interval before doing anything. The cadence clocks start at -inf, not 0."""
+    d, seen = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900)
+    out = d.tick(0.0)
+    assert seen["levels"] == [1]
+    assert seen["read"] == [1]
+    assert out["levels"] is not None and out["read"] is not None
+
+
+def test_daemon_respects_each_cadence(tmp_path, monkeypatch):
+    """Levels every 10s, a reading every 900s -- and not more often."""
+    d, seen = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900)
+    d.tick(0.0)
+    d.tick(10.0)          # levels only
+    d.tick(20.0)          # levels only
+    d.tick(900.0)         # both
+    assert len(seen["levels"]) == 4
+    assert len(seen["read"]) == 2
+
+
+def test_daemon_reads_no_market_job_while_closed(tmp_path, monkeypatch):
+    """A closed market is not a reading. The chat is still served, but there is
+    no tape to read and no level worth watching -- and the process must say so."""
+    d, seen = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900)
+    monkeypatch.setattr("desk.daemon.market_session", lambda now=None: _ClosedSession())
+    out = d.tick(0.0)
+    assert out["closed"] is True
+    assert seen["levels"] == [] and seen["read"] == []
+
+
+def test_daemon_keeps_going_when_a_level_check_fails(tmp_path, monkeypatch):
+    """The reading is the primary job. A dead quote source must not stop it."""
+    d, seen = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900)
+
+    def boom(settings, **k):
+        raise RuntimeError("source down")
+
+    monkeypatch.setattr("desk.levels.watch_once", boom)
+    out = d.tick(0.0)
+    assert out["levels"].get("error") == "RuntimeError"
+    assert seen["read"] == [1]                 # the reading still ran
+    assert d.errors                   # and the failure was recorded
+
+
+def test_daemon_keeps_going_when_a_reading_fails(tmp_path, monkeypatch):
+    """A failed reading must not kill the process either."""
+    d, seen = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900)
+
+    def boom(notifier=None):
+        raise RuntimeError("model down")
+
+    monkeypatch.setattr(d.orchestrator, "watch_once", boom)
+    out = d.tick(0.0)
+    assert out["read"].get("error") == "RuntimeError"
+    assert seen["levels"] == [1]
+
+
+def test_daemon_stops_on_the_deadline(tmp_path, monkeypatch):
+    """`run_forever(seconds=...)` must return on its own, so a smoke run and a
+    test both end without a signal."""
+    d, _ = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900)
+    monkeypatch.setattr(d, "_poll_buttons", lambda wait: None)
+    out = d.run_forever(seconds=0.05)
+    assert out["ticks"] >= 1
+    assert out["uptime_s"] is not None
+
+
+def test_daemon_a_dead_token_does_not_kill_the_process(tmp_path, monkeypatch):
+    """A rejected token must be backed off and reported, not raised: the process
+    is meant to outlive a transport failure."""
+    from desk.daemon import Daemon
+
+    d = Daemon(_settings(tmp_path))
+    slept: list[float] = []
+
+    class Bot:
+        def poll(self, **k):
+            return {"ok": False, "reason": "getUpdates HTTP 401"}
+
+    d._bot = Bot()
+    monkeypatch.setattr("desk.daemon.time.sleep", lambda s: slept.append(s))
+    d._poll_buttons(5.0)                        # must not raise
+    assert slept and slept[0] <= 5.0
+    assert d.errors

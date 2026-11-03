@@ -309,6 +309,26 @@ def cmd_serve(args) -> int:
         time.sleep(interval)
 
 
+def cmd_daemon(args) -> int:
+    """Run the desk as one always-on process: chat, levels, and readings.
+
+    This is the shape a real host wants and a scheduler cannot give. `serve`
+    reads on an interval but never the chat; `bot --listen` reads the chat for a
+    few minutes but never reads the market. Here both run, plus a level check
+    between readings, until stopped.
+    """
+    from .daemon import Daemon
+
+    d = Daemon(_settings(args),
+               level_every=(args.level_every or 10.0),
+               read_every=(args.read_every or 900.0),
+               poll_wait_s=(args.poll_wait or 50.0))
+    d.install_signals()
+    out = d.run_forever(seconds=args.seconds)
+    print(json.dumps(out, ensure_ascii=False, default=str), flush=True)
+    return 0
+
+
 def cmd_check_alerts(args) -> int:
     """Verify the alert pipeline in one call.
 
@@ -496,6 +516,19 @@ def main(argv=None) -> int:
     sv.add_argument("--symbol", default=None)
     sv.add_argument("--interval", type=int, default=15, help="minutes between passes")
     sv.set_defaults(func=cmd_serve)
+
+    dm = sub.add_parser(
+        "daemon", help="always-on process: chat, levels, and readings")
+    dm.add_argument("--symbol", default=None)
+    dm.add_argument("--level-every", type=float, default=None,
+                    help="seconds between level checks (default 10)")
+    dm.add_argument("--read-every", type=float, default=None,
+                    help="seconds between full readings (default 900)")
+    dm.add_argument("--poll-wait", type=float, default=None,
+                    help="seconds one long poll waits on Telegram (default 50)")
+    dm.add_argument("--seconds", type=float, default=None,
+                    help="run for this long instead of forever (smoke test)")
+    dm.set_defaults(func=cmd_daemon)
 
     ca = sub.add_parser("check-alerts", help="verify the alert pipeline end to end")
     ca.add_argument("--symbol", default=None)

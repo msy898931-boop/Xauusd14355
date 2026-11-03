@@ -48,6 +48,7 @@ an overrunning one is reported as timed-out, never as neutral.
 | `python3 -m desk.cli bot` | one poll pass: answer the chat's button presses |
 | `python3 -m desk.cli menu` | publish the button menu to the chat |
 | `python3 -m desk.cli serve --interval 15` | the watch loop, for a host with no cron |
+| `python3 -m desk.cli daemon` | **always-on**: chat + levels + readings in one process |
 | `python3 -m desk.cli agents` | the roster, with weights |
 | `python3 -m desk.cli memory` | what is in the shared store |
 
@@ -210,6 +211,51 @@ gate, above `DESK_ALERT_SCORE` (default 0.25) — and a signal already sent is n
 sent again. Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to enable it; with
 neither set the desk stays silent rather than half-alerting.
 
+## Running it always-on
+
+On a scheduler the desk had to be two loops that never spoke: `serve` read the
+market on an interval but never the chat, and `bot --listen` read the chat for a
+few minutes but never the market. That is the only shape a runner allows — it is
+a fresh VM each time, so nothing can stay resident.
+
+`daemon` is the other shape, for a real host. One resident process with three
+cadences that do not compete:
+
+| cadence | default | why |
+|---|---|---|
+| the chat | long poll, continuous | a press is answered in about a second, whenever it happens |
+| the watched levels | every 10s | a level touched and rejected *between* two readings is caught |
+| a full reading | every 15m | the recommendation and the scoreboard stay current |
+
+**"Instant" is not on offer, and is not claimed.** The price feed is polled HTTP,
+not a stream, so the finest honest cadence is the level interval. And the market
+closes: from Friday's New York close to Sunday's open there is nothing to watch,
+so the market jobs stand down and the process only serves the chat.
+
+A daemon that dies is worse than one that misses a tick, so every job is caught:
+a level check that fails does not stop the reading, and a rejected token backs off
+instead of killing the process.
+
+```bash
+python3 -m desk.cli daemon                      # forever
+python3 -m desk.cli daemon --seconds 60         # a smoke run
+python3 -m desk.cli daemon --level-every 5 --read-every 900
+```
+
+### As a container
+
+```bash
+docker build -t marketdesk .
+docker run -d --name marketdesk --restart unless-stopped \
+  -e TELEGRAM_BOT_TOKEN=... -e TELEGRAM_CHAT_ID=... -e GROQ_API_KEY=... \
+  -v marketdesk-data:/data -e DESK_HOME=/data marketdesk
+```
+
+**Mount a volume at `DESK_HOME`.** The alert ledger and the SQLite store live
+there; without one, every restart forgets which signals were already sent and
+re-sends them, and the scoreboard loses its own record. `render.yaml` declares
+both shapes — a worker (paid, recommended) and the 15-minute cron (free).
+
 ## The roster (8 agents)
 
 | agent | craft | weight | what it decides |
@@ -281,8 +327,10 @@ desk/
   sources/biquote.py candles, quote, news, calendar, summary
   agents/           base + the 8 specialists + the ROSTER
   orchestrator.py   the central manager (gather → dispatch → synthesise)
+  daemon.py         the always-on process: chat + levels + readings
+  bot.py            the Telegram chat client (long poll)
   report.py         the card (Arabic by default)
-  cli.py            run / gather / memory / agents
+  cli.py            run / gather / memory / agents / daemon
 ```
 
 ## Backtest

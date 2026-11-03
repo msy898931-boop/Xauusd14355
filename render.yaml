@@ -14,6 +14,50 @@
 # is lost on every restart, so a signal already sent could be re-sent. Mount a
 # Render Disk at /var/data (paid) or accept the reset deliberately.
 services:
+  # ---- the always-on desk (recommended) --------------------------------
+  # One resident process: the chat, the levels, and the readings. This is the
+  # shape that makes the desk feel live -- a press is answered in about a
+  # second, and a level touched between two readings is caught. It needs a paid
+  # instance type: Render's free tier covers web services and static sites, and
+  # a worker is neither.
+  - type: worker
+    name: marketdesk-daemon
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter            # free tier does not include workers
+    # A mounted disk is not optional here. Without it the container's DESK_HOME
+    # is lost on every restart, so the alert ledger forgets what it sent and the
+    # scoreboard forgets what it graded -- the desk would re-alert and lose its
+    # own record. Render disks require a paid plan and attach to one instance.
+    disk:
+      name: desk-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DESK_HOME
+        value: /data
+      - key: DESK_SYMBOL
+        value: XAUUSD
+      - key: DESK_ALERT_SCORE
+        value: "0.25"
+      - key: DESK_MIN_RR
+        value: "1.5"
+      - key: DESK_EVENT_WINDOW_H
+        value: "6"
+      # Secrets: set in the Render dashboard, never written to git.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+
+  # ---- the cron fallback (free) ----------------------------------------
+  # One reading every 15 minutes and nothing else. No chat, no sub-15-minute
+  # level check. Kept so the desk can run without a paid instance, and as a
+  # second opinion if the worker is ever down. Do not run both against the same
+  # DESK_HOME: two processes would race the ledger and re-send alerts.
   - type: cron
     name: marketdesk-watch
     runtime: python
