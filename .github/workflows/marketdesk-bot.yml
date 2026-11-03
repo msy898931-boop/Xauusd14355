@@ -3,9 +3,16 @@ name: marketdesk-bot
 # The button on the Telegram chat, served without a server.
 #
 # A webhook would need a long-lived HTTPS endpoint; this repository has none.
-# So the chat is polled instead: every five minutes a runner asks Telegram what
-# was pressed and answers it. That is free and serverless, at the cost of
-# latency -- a reply lands on the next pass, not instantly.
+# So the chat is polled instead -- but with a long poll, not a short one. Each
+# run connects to Telegram and STAYS connected for a few minutes, so a press is
+# answered in about a second instead of waiting for the next scheduled run.
+# `--listen` is what buys that: `getUpdates` blocks on Telegram's side and
+# returns the instant something arrives.
+#
+# WHY A FIVE-MINUTE CRON IS STILL CORRECT
+# The listen window is shorter than the gap between runs, so each run ends
+# cleanly rather than being killed mid-answer. Two runs must never overlap --
+# they would race for the same update -- which `concurrency` enforces.
 #
 # The state is confirmed to Telegram, not kept locally. A runner is a fresh VM
 # with no disk, so a local "last seen" pointer would be lost and every pass
@@ -66,9 +73,13 @@ jobs:
             if [ -z "$val" ]; then echo "$v: MISSING"; else echo "$v: set (length ${#val})"; fi
           done
 
-      - name: Answer the chat
+      # 260s of listening inside a 5-minute cron: the run ends with margin, and
+      # the next one starts after it. A press lands in about a second.
+      - name: Listen for presses
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-        run: python3 -m desk.cli bot --budget 240 ${{ inputs.publish_menu && '--greet' || '' }}
+        run: |
+          python3 -m desk.cli bot --listen --seconds 260 \
+            ${{ inputs.publish_menu && '--greet' || '' }}

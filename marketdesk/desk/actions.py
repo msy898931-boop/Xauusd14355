@@ -86,12 +86,12 @@ class Actions:
     # ---- the menu ------------------------------------------------------
     def menu_text(self) -> str:
         return ("<b>مكتب تحليل السوق</b>\n"
-                "اختر من الأزرار:\n"
-                "📊 تحليل الآن — تشغيل كامل وتوصية\n"
-                "🎯 التوصية الحالية — آخر قراءة محفوظة\n"
-                "📋 آخر تقرير — البطاقة الكاملة\n"
-                "⏱️ حالة السوق — السعر والعمر\n"
-                "📈 معدل النجاح — تقييم الصفقات السابقة")
+                "اختر من الأزرار 👇\n"
+                "\n"
+                "📊 تحليل الآن · 🎯 التوصية\n"
+                "📈 الخطة الكاملة · ⏱️ السوق\n"
+                "🔔 المستويات · 📚 دراسة الذهب\n"
+                "📋 آخر تقرير · 📈 معدل النجاح")
 
     def run(self, action: str) -> str:
         handler = {
@@ -100,17 +100,150 @@ class Actions:
             "report": self.report,
             "market": self.market,
             "hitrate": self.hitrate,
+            "plan": self.plan,
+            "levels": self.levels,
+            "gold": self.gold,
+            "help": self.help,
             "menu": self.menu_text,
         }.get(action)
         if handler is None:
             return f"⚠️ زر غير معروف: {_e(action)}"
         text = handler()
-        # `recommend` and `market` build their own markup and escape the dynamic
-        # fields inline. Everything else is plain text (an agent summary can
-        # contain `&`), so it is escaped as one block.
-        if action in ("analysis", "report", "hitrate"):
+        # Answers that carry their own markup (`recommend`, `market`, `plan`,
+        # `levels`, `help`, `menu`) escape their dynamic fields inline. The rest
+        # are plain text -- a study or an agent summary can contain `&` -- so
+        # they are escaped as one block. Escaping a markup-bearing answer would
+        # print `&lt;b&gt;`; not escaping a plain one can drop the whole message.
+        if action in ("analysis", "report", "hitrate", "gold"):
             return escape(text)
         return text
+
+    # ---- the long history file -----------------------------------------
+    def _long_csv(self):
+        """Where the 10-year CSV lives, from the package or the repo root.
+
+        The bot runs from a fresh checkout, so the path must be found rather than
+        assumed: `../longdata` is right from `marketdesk/`, but the runner's cwd
+        is the repo root.
+        """
+        from pathlib import Path
+
+        here = Path(__file__).resolve()
+        for cand in (here.parent.parent.parent / "longdata" / f"{self.settings.symbol}_1d.csv",
+                     Path("longdata") / f"{self.settings.symbol}_1d.csv",
+                     Path("../longdata") / f"{self.settings.symbol}_1d.csv"):
+            if cand.exists():
+                return cand
+        return None
+
+    def help(self) -> str:
+        return (
+            "<b>مكتب تحليل السوق — المساعدة</b>\n"
+            "\n"
+            "<b>الأزرار:</b>\n"
+            "📊 <b>تحليل الآن</b> — تشغيل المكتب كامل (كل الوكلاء + النموذج) وتوصية\n"
+            "🎯 <b>التوصية</b> — آخر قراءة محفوظة، فورية\n"
+            "📈 <b>الخطة الكاملة</b> — شراء وبيع مشروط مع الوقف والأهداف\n"
+            "⏱️ <b>السوق</b> — السعر الحالي وعمر التسعيرة\n"
+            "🔔 <b>المستويات</b> — المستويات المراقَبة وأيّها انكسر\n"
+            "📚 <b>دراسة الذهب</b> — 10 سنين: شو صار لما كان الذهب بهالحالة\n"
+            "📋 <b>آخر تقرير</b> — البطاقة الكاملة لكل وكيل\n"
+            "📈 <b>معدل النجاح</b> — تقييم الصفقات السابقة\n"
+            "\n"
+            "<b>أوامر سريعة:</b> /menu · /plan · /gold · /levels\n"
+            "\n"
+            "<i>ملاحظة: الرد بيوصل خلال ثوانٍ إذا في جلسة مراقبة شغّالة، وإلا "
+            "لحد 5 دقايق. المكتب صامت بشكل مقصود — ما بيبعت إلا لما يكون في شي.</i>")
+
+    def plan(self) -> str:
+        """The two-sided conditional plan, from the shipped history."""
+        csv = self._long_csv()
+        if csv is None:
+            return "📈 لا يوجد ملف تاريخ محفوظ. شغّل <code>desk longdata</code> أولاً."
+        from .backtest import load_daily
+        from .plan import build_plan
+
+        bars = load_daily(csv)
+        closed = [b for b in bars if not b.get("isOpen")]
+        if len(closed) < 80:
+            return "📈 التاريخ قصير — بدك 80 شمعة مقفلة على الأقل."
+        live = closed[-1]["close"]
+        quote, _ = self._quote_or_none()
+        if quote:
+            live = float(quote["mid"])
+        p = build_plan(bars, live)
+        return self._format_plan_ar(p)
+
+    def _quote_or_none(self) -> tuple[dict | None, str | None]:
+        try:
+            q = sources.fetch_quote(self.settings.symbol)
+            self.shared.save_quote(self.settings.symbol, q)
+            return q, None
+        except sources.SourceError as exc:
+            return self.shared.load_quote(self.settings.symbol), str(exc)
+
+    def _format_plan_ar(self, p: dict) -> str:
+        long_s, short_s = p["long"], p["short"]
+        trend = "صاعد" if p["ema20"] > p["ema50"] else "هابط"
+        lines = [
+            f"📈 <b>الخطة الكاملة</b> — {self.settings.symbol}",
+            f"السعر <b>{p['live']:,.2f}</b> · الاتجاه العام <b>{trend}</b>",
+            f"ATR {p['atr']:,.2f} · RSI {p['rsi']:.0f} · "
+            f"المدى {p['prior_low']:,.2f}–{p['prior_high']:,.2f}",
+            "",
+            "🟢 <b>شراء مشروط</b>",
+            f"  يتفعّل فوق <b>{long_s.trigger:,.2f}</b>",
+            f"  الوقف {long_s.stop:,.2f}  ({long_s.risk:,.0f} نقطة)",
+            "  الأهداف: " + " · ".join(f"{t:,.0f}" for t in long_s.targets),
+            "",
+            "🔴 <b>بيع مشروط</b>",
+            f"  يتفعّل تحت <b>{short_s.trigger:,.2f}</b>",
+            f"  الوقف {short_s.stop:,.2f}  ({short_s.risk:,.0f} نقطة)",
+            "  الأهداف: " + " · ".join(f"{t:,.0f}" for t in short_s.targets),
+            "",
+            "<i>السعر بين الطرفين = لا صفقة. الخطة مشروطة، مو توصية.</i>",
+        ]
+        return "\n".join(lines)
+
+    def levels(self) -> str:
+        """The watched levels and which side is currently broken."""
+        from .levels import DEFAULT_LEVELS, triggered
+
+        quote, err = self._quote_or_none()
+        if not quote:
+            return f"🔔 تعذّر قراءة السعر: {_e(err or 'لا توجد تسعيرة')}"
+        live = float(quote["mid"])
+        hits = triggered(live, DEFAULT_LEVELS)
+        lines = [f"🔔 <b>المستويات المراقَبة</b> — {self.settings.symbol}",
+                 f"السعر <b>{live:,.2f}</b>", ""]
+        for lv in sorted(DEFAULT_LEVELS, key=lambda x: -x.price):
+            hit = lv in hits
+            arrow = "▲" if lv.side == "above" else "▼"
+            mark = "🔴" if hit else "⚪"
+            lines.append(f"{mark} {arrow} <b>{lv.price:,.2f}</b> — {_e(lv.label)}")
+            if hit:
+                lines.append(f"      <i>{_e(lv.note)}</i>")
+        if hits:
+            lines.append("")
+            lines.append(f"<b>{len(hits)} من {len(DEFAULT_LEVELS)} مستوى منكسر.</b>")
+        else:
+            lines.append("")
+            lines.append("<i>ولا مستوى منكسر — السعر بين المستويات.</i>")
+        return "\n".join(lines)
+
+    def gold(self) -> str:
+        """The 10-year study: this state, and what followed it before."""
+        csv = self._long_csv()
+        if csv is None:
+            return "📚 لا يوجد ملف تاريخ. شغّل <code>desk longdata</code> أولاً."
+        from .gold import run_gold_study
+
+        quote, _ = self._quote_or_none()
+        live = float(quote["mid"]) if quote else None
+        try:
+            return run_gold_study(csv, live=live, symbol=self.settings.symbol)
+        except ValueError as exc:
+            return f"📚 تعذّرت الدراسة: {_e(exc)}"
 
     # ---- instant (no agents, no model) ---------------------------------
     def _last_run(self) -> dict | None:
