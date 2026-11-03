@@ -91,6 +91,17 @@ jobs:
         # DESK_ALERT_SCORE, and never the same one twice.
         run: python3 -m desk.cli watch
 
+      # The desk alerts on its own verdict; this alerts on the levels a plan is
+      # built around. The orchestrator can say "no trade" for weeks while price
+      # sits between a trigger and a stop, and the moment one side is decided is
+      # still worth a message. Each level fires once (the ledger keys on
+      # level+side), so a 15-minute cron does not repeat itself.
+      - name: Level alerts
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 -m desk.cli levels
+
       # Optional: proves the alert path end to end on demand, because a silent
       # watch pass cannot tell "not configured" from "no signal yet". The
       # getMe call is the only honest proof a token works.

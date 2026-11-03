@@ -1698,3 +1698,38 @@ def test_plan_labels_each_side_with_its_evidence(tmp_path):
     assert "SUPPORTED" in out
     assert "NOT SUPPORTED" in out
     assert "not a promise" in out
+
+
+# ---- levels -----------------------------------------------------------
+
+def test_levels_fire_on_the_breaking_side_only():
+    """A level alerts when price is past it, and not before."""
+    from desk.levels import DEFAULT_LEVELS, triggered
+
+    up = triggered(3980.0, DEFAULT_LEVELS)     # above the day high
+    labels = {lv.label for lv in up}
+    assert "قمة اليوم" in labels
+    down = triggered(3860.0, DEFAULT_LEVELS)   # below the big low
+    labels = {lv.label for lv in down}
+    assert "القاع الكبير" in labels
+    # a price in the middle of the range crosses nothing
+    assert triggered(3910.0, DEFAULT_LEVELS) == []
+
+
+def test_level_fingerprint_is_stable_and_side_specific():
+    """The ledger key must not change between runs, or the alert repeats."""
+    from desk.levels import Level, fingerprint
+
+    a = Level(3970.0, "x", "above", "")
+    b = Level(3970.0, "x", "above", "")
+    c = Level(3970.0, "x", "below", "")
+    assert fingerprint(a) == fingerprint(b)
+    assert fingerprint(a) != fingerprint(c)
+
+
+def test_level_message_names_the_level_and_the_price():
+    from desk.levels import DEFAULT_LEVELS, message
+
+    lv = DEFAULT_LEVELS[0]
+    out = message(lv, 3985.0)
+    assert "3,970.00" in out and "3,985.00" in out
