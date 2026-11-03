@@ -1703,17 +1703,18 @@ def test_plan_labels_each_side_with_its_evidence(tmp_path):
 # ---- levels -----------------------------------------------------------
 
 def test_levels_fire_on_the_breaking_side_only():
-    """A level alerts when price is past it, and not before."""
-    from desk.levels import DEFAULT_LEVELS, triggered
+    """A level alerts when price is past it, and not before.
 
-    up = triggered(3980.0, DEFAULT_LEVELS)     # above the day high
-    labels = {lv.label for lv in up}
-    assert "قمة اليوم" in labels
-    down = triggered(3860.0, DEFAULT_LEVELS)   # below the big low
-    labels = {lv.label for lv in down}
-    assert "القاع الكبير" in labels
-    # a price in the middle of the range crosses nothing
-    assert triggered(3910.0, DEFAULT_LEVELS) == []
+    The list is built here rather than read from DEFAULT_LEVELS: the test is of
+    the mechanism, so editing the live plan must not break it.
+    """
+    from desk.levels import Level, triggered
+
+    levels = (Level(100.0, "top", "above", ""), Level(50.0, "bottom", "below", ""))
+    assert [lv.label for lv in triggered(120.0, levels)] == ["top"]
+    assert [lv.label for lv in triggered(40.0, levels)] == ["bottom"]
+    assert triggered(75.0, levels) == []           # between them: nothing
+    assert len(triggered(200.0, levels)) == 1      # only the above-side fires
 
 
 def test_level_fingerprint_is_stable_and_side_specific():
@@ -1728,11 +1729,23 @@ def test_level_fingerprint_is_stable_and_side_specific():
 
 
 def test_level_message_names_the_level_and_the_price():
-    from desk.levels import DEFAULT_LEVELS, message
+    from desk.levels import Level, message
 
-    lv = DEFAULT_LEVELS[0]
-    out = message(lv, 3985.0)
+    out = message(Level(3970.0, "top", "above", "go up"), 3985.0)
     assert "3,970.00" in out and "3,985.00" in out
+
+
+def test_watched_levels_are_well_formed():
+    """The live plan's levels must each be a real, non-overlapping watch."""
+    from desk.levels import DEFAULT_LEVELS
+
+    assert len(DEFAULT_LEVELS) >= 2
+    for lv in DEFAULT_LEVELS:
+        assert lv.side in ("above", "below")
+        assert lv.price > 0
+        assert lv.label and lv.note
+    prices = [lv.price for lv in DEFAULT_LEVELS]
+    assert len(prices) == len(set(prices))         # no duplicate price
 
 
 # ---- long history / cross-market --------------------------------------
