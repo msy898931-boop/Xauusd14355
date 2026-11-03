@@ -124,22 +124,34 @@ def cmd_longdata(args) -> int:
 
 
 def cmd_levels(args) -> int:
-    """One pass: alert once for each watched level the price has crossed.
+    """One pass: alert once for each watched level the price has crossed, and
+    once for each it is about to cross.
 
     Run from a schedule. A level fires once (the ledger keys on level+side), so
     a 15-minute cron does not repeat itself while the price sits past a level.
+    The proximity warning has its own key, so a level can warn and then fire.
     """
     from . import sources
-    from .levels import DEFAULT_LEVELS, fingerprint, message, triggered
+    from .levels import (
+        DEFAULT_LEVELS,
+        approaching,
+        fingerprint,
+        message,
+        near_fingerprint,
+        near_message,
+        triggered,
+    )
     from .notify import Notifier, SignalLedger
 
     s = _settings(args)
     symbol = args.symbol or "XAUUSD"
     live = float(sources.fetch_quote(symbol)["mid"])
+    within = getattr(args, "within", 12.0)
     hits = triggered(live, DEFAULT_LEVELS)
+    near = approaching(live, DEFAULT_LEVELS, within=within)
     ledger = SignalLedger(s.signal_ledger)
     n = Notifier(s)
-    sent = []
+    sent, warned = [], []
     for lv in hits:
         fp = fingerprint(lv)
         if ledger.seen(fp):
@@ -147,10 +159,20 @@ def cmd_levels(args) -> int:
         if n.send(message(lv, live)):
             ledger.record(fp, f"{lv.price:g}")
             sent.append(lv.label)
+    for lv, dist in near:
+        fp = near_fingerprint(lv)
+        if ledger.seen(fp):
+            continue
+        if n.send(near_message(lv, live, dist)):
+            ledger.record(fp, f"near {lv.price:g}")
+            warned.append(lv.label)
     print(f"live {live:,.2f} · crossed {len(hits)} of {len(DEFAULT_LEVELS)} "
-          f"levels · alerted {len(sent)}")
+          f"levels · alerted {len(sent)} · near {len(near)} · warned {len(warned)}")
     for lv in hits:
         print(f"  {'▲' if lv.side == 'above' else '▼'} {lv.price:,.2f}  {lv.label}")
+    for lv, dist in near:
+        print(f"  ~ {'▲' if lv.side == 'above' else '▼'} {lv.price:,.2f}  "
+              f"{lv.label}  ({dist:,.1f} away)")
     return 0
 
 
@@ -391,7 +413,9 @@ def main(argv=None) -> int:
     ld.add_argument("--range", default="10y")
     ld.set_defaults(func=cmd_longdata)
 
-    lv = sub.add_parser("levels", help="alert once when price crosses a watched level")
+    lv = sub.add_parser("levels", help="alert once when price crosses or nears a watched level")
+    lv.add_argument("--within", type=float, default=12.0,
+                    help="points band for the early 'approaching' warning (default 12)")
     lv.set_defaults(func=cmd_levels)
 
     pl = sub.add_parser("plan", help="live two-sided plan with stop and target ladder")

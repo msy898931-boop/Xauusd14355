@@ -7,6 +7,7 @@ down, so a clean daily cannot be outvoted by three choppy intraday frames.
 
 from __future__ import annotations
 
+from .. import arabic as ar
 from .. import indicators as ind
 from .base import Agent, Study
 
@@ -50,10 +51,10 @@ class TrendAgent(Agent):
         stance = self.stance_of(norm)
         agree = sum(1 for d in per.values() if d.get("vote") == (1 if norm > 0 else -1))
         conf = min(1.0, abs(norm) + 0.1)
-        facts = (f"weighted tally {tally:+.2f}/{wtot:.2f} (normalised {norm:+.2f}); "
-                 f"{agree} frames agree; per-frame votes "
+        facts = (f"المجموع المرجّح {tally:+.2f}/{wtot:.2f} (المعيار {norm:+.2f})؛ "
+                 f"{agree} فريمات متوافقة؛ أصوات الفريمات "
                  + ", ".join(f"{tf}:{d.get('vote')}" for tf, d in per.items()))
-        summary = self.narrate(facts, "Summarise the multi-timeframe trend.") or (
-            f"Trend is {stance}. {facts}")
+        summary = self.narrate(facts, "لخّص الاتجاه على الفريمات.") or (
+            f"الاتجاه {ar.stance(stance)}. {facts}")
         return Study(self.name, self.kind, stance, conf, norm, summary,
                      {"frames": per, "tally": tally, "normalised": norm})

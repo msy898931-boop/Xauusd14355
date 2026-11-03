@@ -25,7 +25,7 @@ class LevelsAgent(Agent):
         px = self.live_price()
         if px is None:
             return Study(self.name, self.kind, "neutral", 0.0, 0.0,
-                         "No price available; levels withheld.", {})
+                         "لا يوجد سعر متاح — ما في مستويات.", {})
 
         supports, resistances = [], []
         for tf, bars in data.items():
@@ -83,9 +83,12 @@ class LevelsAgent(Agent):
             if up_room + down_room > 0:
                 score = max(-1.0, min(1.0, (up_room - down_room) / (up_room + down_room)))
         stance = self.stance_of(score)
-        facts = (f"price {px}; nearest support {nearest_sup}; nearest resistance "
-                 f"{nearest_res}; fibs {fibs}")
-        summary = self.narrate(facts, "Summarise the key levels around price.") or (
-            f"Nearest support {nearest_sup}, nearest resistance {nearest_res}. {facts}")
+        fib_txt = ", ".join(
+            f"{f.get('ratio')} عند {f.get('level')}"
+            for f in (fibs or [])[:5]) or "—"
+        facts = (f"السعر {px}؛ أقرب دعم {nearest_sup}؛ أقرب مقاومة "
+                 f"{nearest_res}؛ فيبوناتشي {fib_txt}")
+        summary = self.narrate(facts, "لخّص المستويات المهمة حول السعر.") or (
+            f"أقرب دعم {nearest_sup}، أقرب مقاومة {nearest_res}. {facts}")
         return Study(self.name, self.kind, stance, 0.6, score, summary,
                      {"price": px, "supports": supports, "resistances": resistances, "fibs": fibs})

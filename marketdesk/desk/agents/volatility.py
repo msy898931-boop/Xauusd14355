@@ -7,8 +7,19 @@ a breakout should be trusted. The agent reports the numbers and the regime.
 
 from __future__ import annotations
 
+from .. import arabic as ar
 from .. import indicators as ind
 from .base import Agent, Study
+
+
+def _num(v) -> str:
+    """A missing value reads as a dash, never as the string "None"."""
+    if v is None:
+        return "—"
+    try:
+        return f"{float(v):.2f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        return str(v)
 
 
 class VolatilityAgent(Agent):
@@ -47,10 +58,11 @@ class VolatilityAgent(Agent):
         # the agent was bear 46% of the time and bull never. The regime is in the
         # payload, where the risk gate and the stop sizing already read it.
         score = 0.0
-        facts = ("; ".join(f"{tf}: ATR {d.get('atr')} ({d.get('atr_pct')}%)"
-                           for tf, d in per.items())
-                 + f"; day change {day_pct}%; regime {regime}")
-        summary = self.narrate(facts, "Summarise volatility and the regime.") or (
-            f"Volatility regime: {regime}. {facts}")
+        facts = ("; ".join(
+            f"{tf}: ATR {_num(d.get('atr'))} ({_num(d.get('atr_pct'))}%)"
+            for tf, d in per.items())
+            + f"؛ تغيّر اليوم {_num(day_pct)}%؛ النظام {ar.regime(regime)}")
+        summary = self.narrate(facts, "لخّص التذبذب والنظام السائد.") or (
+            f"نظام التذبذب: {ar.regime(regime)}. {facts}")
         return Study(self.name, self.kind, "neutral", 0.5, score, summary,
                      {"frames": per, "regime": regime, "day_diff_pct": day_pct})

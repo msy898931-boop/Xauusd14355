@@ -7,8 +7,19 @@ direction, and lets the orchestrator weigh it.
 
 from __future__ import annotations
 
+from .. import arabic as ar
 from .. import indicators as ind
 from .base import Agent, Study
+
+
+def _num(v) -> str:
+    """A missing or zero reading prints as a dash, not as the word "None"."""
+    if v is None:
+        return "—"
+    try:
+        return f"{float(v):.1f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        return str(v)
 
 
 class MomentumAgent(Agent):
@@ -47,11 +58,13 @@ class MomentumAgent(Agent):
         stance = self.stance_of(norm)
         overbought = [tf for tf, d in per.items() if (d.get("rsi") or 0) > 70]
         oversold = [tf for tf, d in per.items() if 0 < (d.get("rsi") or 100) < 30]
-        facts = ("; ".join(f"{tf}: RSI {d.get('rsi') and round(d['rsi'],1)}, "
-                           f"MACDhist {d.get('macd_hist') and round(d['macd_hist'],2)}"
-                           for tf, d in per.items())
-                 + f"; overbought on {overbought or 'none'}; oversold on {oversold or 'none'}")
-        summary = self.narrate(facts, "Summarise momentum and any stretch.") or (
-            f"Momentum is {stance}. {facts}")
+        facts = ("; ".join(
+            f"{tf}: RSI {_num(d.get('rsi'))}، "
+            f"هيستوغرام MACD {_num(d.get('macd_hist'))}"
+            for tf, d in per.items())
+            + f"؛ تشبّع شرائي على {'، '.join(overbought) or 'لا فريم'}؛ "
+              f"تشبّع بيعي على {'، '.join(oversold) or 'لا فريم'}")
+        summary = self.narrate(facts, "لخّص الزخم وهل السعر ممدود.") or (
+            f"الزخم {ar.stance(stance)}. {facts}")
         return Study(self.name, self.kind, stance, min(1.0, abs(norm) + 0.2), norm,
                      summary, {"frames": per, "overbought": overbought, "oversold": oversold})

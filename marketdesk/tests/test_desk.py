@@ -513,7 +513,7 @@ def test_plan_rejects_setup_when_stop_wider_than_reward(tmp_path):
     rec = desk._plan("long", 100.0, atr1h=10.0, levels=levels, risk=None,
                      by_name={}, score=0.5)
     assert rec["entry"] is None and rec["targets"] == []
-    assert "reward:risk" in rec["levels_note"]
+    assert "الوقف أوسع من المكافأة" in rec["levels_note"]
 
 
 def test_plan_reaches_past_near_levels_for_a_paying_target(tmp_path):
@@ -1193,7 +1193,9 @@ def test_report_and_hitrate_escape_plain_text(tmp_path):
     them can contain `&`, which would fail the send if left raw."""
     from desk.actions import Actions
     acts = Actions(_settings(tmp_path))
-    assert "R&amp;D" in acts.run("hitrate") or "Scoreboard" in acts.run("hitrate")
+    out = acts.run("hitrate")
+    assert out and "زر غير معروف" not in out
+    assert "&lt;" not in out          # no markup was invented and escaped
 
 
 def test_bot_defers_unanswered_presses_instead_of_dropping_them(tmp_path, monkeypatch):
@@ -1311,7 +1313,11 @@ def test_bot_answers_a_typed_message_not_just_a_button(tmp_path, monkeypatch):
     out = bot.poll()
     assert out["handled"] == ["analysis"]
     assert sent and sent[0][0] == "answer:analysis"
-    assert sent[0][1].get("keyboard") is False       # analysis, not the menu
+    # analysis gets the nav row, not the full menu: refresh + back
+    mk = sent[0][1].get("markup") or {}
+    assert mk.get("inline_keyboard"), "analysis must carry a nav row"
+    labels = [b["text"] for row in mk["inline_keyboard"] for b in row]
+    assert "🏠 القائمة" in labels and "📊 تحليل الآن" not in labels
 
 
 def test_bot_shows_the_menu_for_an_unknown_message(tmp_path, monkeypatch):
@@ -1330,7 +1336,9 @@ def test_bot_shows_the_menu_for_an_unknown_message(tmp_path, monkeypatch):
     monkeypatch.setattr("desk.actions.Actions", FakeActions)
     out = bot.poll()
     assert out["handled"] == ["menu"]
-    assert sent[0][1].get("keyboard") is True        # the buttons come with it
+    mk = sent[0][1].get("markup") or {}
+    labels = [b["text"] for row in mk.get("inline_keyboard", []) for b in row]
+    assert "📊 تحليل الآن" in labels                 # the full menu comes with it
 
 
 def test_bot_folds_a_backlog_into_one_reply(tmp_path, monkeypatch):
@@ -1432,7 +1440,7 @@ def test_a_real_stop_makes_a_near_target_unpayable(tmp_path):
                      [{"level": 3923.97, "kind": "pivot"}])
     plan = orch._plan("short", 3922.07, 15.31, levels, None, {}, -0.47)
     assert plan["entry"] is None and plan["stop"] is None
-    assert "reward:risk" in plan["levels_note"]
+    assert "الوقف أوسع من المكافأة" in plan["levels_note"]
 
 
 # ---- backtest ---------------------------------------------------------
@@ -1868,7 +1876,7 @@ def test_gold_study_excludes_the_open_bar(tmp_path):
     other = run_gold_study(b, live=1000.0, symbol="B")
     # the open bar is dropped either way, so the analogue set is the same
     assert "389 days" not in base  # sanity: numbers come from the data
-    assert base.count("CURRENT STATE") == other.count("CURRENT STATE") == 1
+    assert base.count("الحالة الحالية") == other.count("الحالة الحالية") == 1
 
 
 def test_gold_study_reports_both_sides_with_expectancy(tmp_path):
@@ -1882,9 +1890,9 @@ def test_gold_study_reports_both_sides_with_expectancy(tmp_path):
     p = tmp_path / "G_1d.csv"
     p.write_text("\n".join(rows))
     out = run_gold_study(p, live=1200.0, symbol="G")
-    assert "SHORT" in out and "LONG" in out
-    assert "expectancy R" in out
-    assert "base" in out          # the base rate must be shown beside it
+    assert "بيع" in out and "شراء" in out
+    assert "التوقّع R" in out
+    assert "الأساس" in out        # the base rate must be shown beside it
 
 
 # ---- the expanded menu and the listen loop ----------------------------
@@ -2029,3 +2037,214 @@ def test_plain_text_buttons_escape_a_stray_ampersand(tmp_path, monkeypatch):
 
 def action_in_menu(menu, action):
     return any(a == action for row in menu for _l, a in row)
+
+
+# ---- Arabic-only chat -------------------------------------------------
+
+def test_every_agent_fallback_is_arabic(tmp_path, monkeypatch):
+    """The model is a nicety; with no key every summary must still be Arabic.
+    An English fallback sentence would reach the chat as-is.
+
+    Latin is allowed only for a known term -- a ticker, an indicator, an event
+    acronym. The check is against that whitelist, not against zero Latin, so a
+    real leak (an English word) still fails while `MACD` does not."""
+    from desk.agents.base import LATIN_OK, _latin_words
+    from desk.orchestrator import Orchestrator
+
+    s = _settings(tmp_path)
+    s.peers = ("USDJPY",)
+    desk = Orchestrator(s)
+    # Offline and deterministic: the point is the prose, not the feed.
+    bars = _bars(160)
+    monkeypatch.setattr("desk.sources.fetch_candles", lambda sym, tf, limit=1000: bars)
+    monkeypatch.setattr("desk.sources.fetch_quote",
+                        lambda sym: {"mid": bars[-1]["close"], "bid": 1, "ask": 1,
+                                     "market_state": "open", "stale": False,
+                                     "quote_age_s": 0, "day_diff_pct": 1.0,
+                                     "source": "test"})
+    monkeypatch.setattr("desk.sources.fetch_news", lambda symbol=None, max_results=25: [])
+    monkeypatch.setattr("desk.sources.fetch_calendar", lambda importance="high", limit=100: [])
+    monkeypatch.setattr("desk.sources.fetch_summary", lambda: {})
+    run = desk.run()
+    for s in run.studies:
+        assert s.summary, f"{s.agent} produced no summary at all"
+        stray = [w for w in _latin_words(s.summary)
+                 if len(w) >= 3 and w not in LATIN_OK]
+        assert not stray, f"{s.agent} summary is not Arabic: {stray} in {s.summary[:80]}"
+
+
+def test_the_language_guard_accepts_arabic_and_rejects_english():
+    from desk.agents.base import looks_arabic
+
+    assert looks_arabic("الزخم هابط مع RSI 37.0 و MACD -10.9.")
+    assert looks_arabic("التداول موقوف: حدث بعملة USD خلال 6 ساعة (JOLTS Job Openings).",
+                        source="JOLTS Job Openings")
+    assert not looks_arabic("Market structure is bearish.")
+    assert not looks_arabic("البنية هابطة مع bearish BOS.")
+    assert not looks_arabic("")
+    assert not looks_arabic(None)
+
+
+def test_a_drifted_model_answer_falls_back_to_arabic(tmp_path):
+    """The prompt asks for Arabic; a model that drifts must not reach the chat."""
+    from desk.agents.base import Agent
+    from desk.llm import LLM
+
+    class FakeLLM(LLM):
+        def __init__(self, text):
+            super().__init__("k", "m")
+            self._text = text
+
+        def complete(self, system, user, **kw):
+            return self._text
+
+    class A(Agent):
+        name, kind = "t", "generic"
+
+    s = _settings(tmp_path)
+    a = A(s, shared=None, llm=FakeLLM("Trend is bearish across frames."))
+    assert a.narrate("facts", "لخّص") is None      # English -> rejected
+    b = A(s, shared=None, llm=FakeLLM("الاتجاه هابط على كل الفريمات."))
+    assert b.narrate("facts", "لخّص") == "الاتجاه هابط على كل الفريمات."
+
+
+def test_the_report_card_has_no_english_field_labels(tmp_path):
+    """A reader should not meet an English word in the card: the stance, the
+    verdict, the agent name and the market state are all translated."""
+    from desk.actions import Actions
+    from desk.memory import SharedMemory
+
+    s = _settings(tmp_path)
+    shared = SharedMemory(s.shared_db)
+    run_id = "abc123"
+    shared.save_run(run_id, s.symbol, 1000.0, 1001.0, "no-trade", -0.2,
+                    {"gather": {"quote": {"mid": 3900.0,
+                                          "market_state": "open"}},
+                     "levels_note": "لا صفقة"})
+    shared.publish_study(run_id, "momentum", "momentum", "bear", 0.8, -0.6,
+                         "الزخم هابط.", {"frames": {}})
+    out = Actions(s).run("report")
+    assert "هابط" in out and "مفتوح" in out and "الزخم" in out
+    assert "bear" not in out and "open" not in out
+
+
+# ---- the chart --------------------------------------------------------
+
+def test_the_chart_is_a_valid_png_with_the_levels_drawn():
+    """A PNG is written by hand, so the encoder itself is what is tested: the
+    signature, the header size, and pixels of the level colours."""
+    import struct
+    import zlib
+
+    from desk.chart import price_chart
+    from desk.levels import DEFAULT_LEVELS
+
+    bars = [{"openTime": f"2026-01-{i % 28 + 1:02d}T00:00:00Z",
+             "close": 3900 + (i % 40) * 3.0} for i in range(120)]
+    png = price_chart(bars, levels=DEFAULT_LEVELS, live=3905.0)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    w, h = struct.unpack(">II", png[16:24])
+    assert (w, h) == (640, 340)
+    pos, idat = 8, b""
+    while pos < len(png):
+        ln = struct.unpack(">I", png[pos:pos + 4])[0]
+        if png[pos + 4:pos + 8] == b"IDAT":
+            idat += png[pos + 8:pos + 8 + ln]
+        pos += 12 + ln
+    raw = zlib.decompress(idat)                 # a broken stream would raise
+    stride = w * 3
+
+    def px(x, y):
+        i = y * (stride + 1) + 1 + x * 3       # skip the per-row filter byte
+        return (raw[i], raw[i + 1], raw[i + 2])
+
+    cols = {px(x, y) for y in range(h) for x in range(w)}
+    assert (34, 197, 94) in cols                # an "above" level
+    assert (239, 68, 68) in cols                # a "below" level
+    assert (250, 204, 21) in cols               # the price line
+
+
+def test_the_chart_drops_the_forming_bar(tmp_path):
+    """The picture must plot closed bars only, like every other reader."""
+    import csv
+
+    from desk.chart import price_chart
+
+    p = tmp_path / "X_1d.csv"
+    with p.open("w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["openTime", "open", "high", "low", "close", "volume",
+                    "tickVolume", "isOpen"])
+        for i in range(120):
+            w.writerow([f"2026-01-{i % 28 + 1:02d}T00:00:00Z", 100 + i, 102 + i,
+                        98 + i, 100 + i, 0, 10, "False"])
+        w.writerow(["2026-11-03T00:00:00Z", 9999, 19999, 1, 5000, 0, 10, "True"])
+    from desk.backtest import load_daily
+    bars = [b for b in load_daily(p) if not b.get("isOpen")]
+    assert len(bars) == 120
+    png = price_chart(bars[-120:])
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+# ---- navigation -------------------------------------------------------
+
+def test_every_answer_carries_a_way_back():
+    """A reply with no button is a dead end: the reader has to remember a
+    command. Every action gets the nav row, except the menu and help, which
+    carry the full menu."""
+    from desk.bot import MENU, keyboard_for
+
+    for _label, action in (b for row in MENU for b in row):
+        kb = keyboard_for(action)
+        labels = [b["text"] for row in kb["inline_keyboard"] for b in row]
+        if action in ("menu", "help"):
+            assert "📊 تحليل الآن" in labels, f"{action} must show the menu"
+        else:
+            assert "🏠 القائمة" in labels, f"{action} has no way back"
+            assert "🔄 تحديث" in labels, f"{action} cannot be refreshed"
+            # refresh re-runs the SAME action, so the button is not a lie
+            refresh = [b for row in kb["inline_keyboard"] for b in row
+                       if b["text"] == "🔄 تحديث"][0]
+            assert refresh["callback_data"] == action
+
+
+def test_the_menu_has_no_duplicate_and_fits_a_phone():
+    from desk.bot import MENU
+
+    actions = [a for row in MENU for _t, a in row]
+    assert len(actions) == len(set(actions))
+    assert all(len(row) <= 2 for row in MENU)
+    assert len(actions) >= 10
+
+
+# ---- the proximity warning -------------------------------------------
+
+def test_approaching_finds_a_near_level_and_ignores_a_broken_one():
+    """The warning is about a level NOT yet broken; a broken level is the other
+    signal and must not be reported twice."""
+    from desk.levels import DEFAULT_LEVELS, approaching, triggered
+
+    # 3905 sits inside the 12-point band of the 3912 level (above) and the 3897
+    # level (below) without breaking either
+    near = dict((lv.price, d) for lv, d in approaching(3905.0, DEFAULT_LEVELS, within=12.0))
+    assert 3912.0 in near and 3897.0 in near
+    assert triggered(3905.0, DEFAULT_LEVELS) == []
+    # a price past the level is a break, not a warning
+    assert 3912.0 not in [lv.price for lv, _ in approaching(3920.0, DEFAULT_LEVELS)]
+    assert triggered(3920.0, DEFAULT_LEVELS)
+
+
+def test_near_and_broken_have_different_ledger_keys():
+    """If both signals shared a key the second would be swallowed by the first."""
+    from desk.levels import DEFAULT_LEVELS, fingerprint, near_fingerprint
+
+    lv = DEFAULT_LEVELS[0]
+    assert fingerprint(lv) != near_fingerprint(lv)
+
+
+def test_the_near_message_says_it_is_not_a_break_yet():
+    from desk.levels import DEFAULT_LEVELS, near_message
+
+    text = near_message(DEFAULT_LEVELS[0], 3925.0, 6.0)
+    assert "اقتراب" in text and "6.0" in text
+    assert "لسا ما انكسر" in text               # the honest caveat

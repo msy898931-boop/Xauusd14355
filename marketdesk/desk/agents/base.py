@@ -33,6 +33,56 @@ class Study:
                 "summary": self.summary, "payload": self.payload}
 
 
+# ---- helpers -------------------------------------------------------
+# A short list of terms the desk's own text legitimately carries in Latin
+# letters. They are tickers and indicator names, not prose, and Arabic prose
+# uses them as-is. Anything else in Latin letters is the model drifting back
+# into English, which the chat must not show.
+LATIN_OK = {
+    "rsi", "macd", "atr", "ema", "sma", "bos", "choch", "fib", "fibs",
+    "usd", "usdjpy", "eurusd", "xauusd", "xagusd", "btcusd", "usoil", "dxy",
+    "spx", "jolts", "cpi", "nfp", "fomc", "gdp", "pmi", "ecb", "fed", "boj",
+    "mm", "bn", "api", "llm", "usd/jpy", "r/r", "r:r",
+}
+
+
+def _latin_words(text: str) -> list[str]:
+    """Latin-script words in `text`, lowercased.
+
+    A word must be 3+ letters to count: "a" and "R" are used as symbols in
+    Arabic prose, and flagging them would reject good text.
+    """
+    import re
+    return [w.lower().strip("-'") for w in re.findall(r"[A-Za-z][A-Za-z'-]*", text)]
+
+
+def looks_arabic(text: str | None, *, source: str = "") -> bool:
+    """True when `text` is Arabic prose, not English that leaked through.
+
+    The model is told to answer in Arabic, and it usually does. But it drifts:
+    one live run wrote "bearish BOS" inside an otherwise Arabic sentence. A
+    prompt cannot guarantee a language, so the check happens after the fact and
+    the caller falls back to its deterministic Arabic sentence instead of
+    shipping English to the chat.
+
+    A Latin word is tolerated only if it is a known term (a ticker, an indicator)
+    or if it also appears in `source` -- the facts the model was given. That
+    second rule is what lets an untranslatable proper noun through (an event name
+    like "JOLTS Job Openings" is in the input) while catching a word the model
+    invented in English ("bearish" is not, because the input said "هابط").
+    """
+    if not text or not text.strip():
+        return False
+    if not any("\u0600" <= ch <= "\u06ff" for ch in text):
+        return False
+    allowed = LATIN_OK | set(_latin_words(source))
+    for w in _latin_words(text):
+        if len(w) < 3 or w in allowed:
+            continue
+        return False
+    return True
+
+
 class Agent:
     """Base class. Subclasses set `name`, `kind`, `weight` and implement `study`."""
 
@@ -109,12 +159,24 @@ class Agent:
 
     # ---- helpers -------------------------------------------------------
     def narrate(self, facts: str, instruction: str) -> str | None:
-        """Ask the model to phrase a study the agent already computed. The model
-        is told it may not add numbers, so a failure or a stray figure is safe."""
+        """Ask the model to phrase a study the agent already computed.
+
+        Returns None when the model is unavailable OR answers in English, so
+        every caller's `or <deterministic Arabic sentence>` fallback fires. The
+        language check is the point: a prompt cannot guarantee a language, and
+        the chat is Arabic-only, so a drifted answer is treated as a failure
+        rather than shipped. The model may not add numbers either, so a failure
+        here is always safe.
+        """
         system = (
-            "You are a specialist market analyst inside an automated desk. "
-            "You will be given computed facts. Phrase them in 2-3 sentences. "
-            "Rules: use ONLY the numbers given; invent nothing; never promise "
-            "profit; if a value is missing, say so. Answer in the same language "
-            "as the instruction.")
-        return self.llm.complete(system, f"{instruction}\n\nFACTS:\n{facts}")
+            "أنت محلّل أسواق متخصص داخل مكتب تحليل آلي. "
+            "سيُعطى لك وقائع محسوبة مسبقاً. صُغها في جملتين إلى ثلاث. "
+            "القواعد: استعمل الأرقام المعطاة فقط؛ لا تخترع شيئاً؛ لا تَعِد بربح؛ "
+            "إن غابت قيمة فقُل ذلك. "
+            "اكتب الجواب بالعربية الفصحى المبسّطة حصراً، حتى لو كانت الوقائع "
+            "بالإنجليزية — لا تستعمل أي كلمة إنجليزية، والأرقام وحدها مستثناة. "
+            "اكتب الأرقام بالأرقام اللاتينية (0-9) وبفاصلة عشرية.")
+        text = self.llm.complete(system, f"{instruction}\n\nالوقائع:\n{facts}")
+        if text and not looks_arabic(text, source=facts):
+            return None
+        return text

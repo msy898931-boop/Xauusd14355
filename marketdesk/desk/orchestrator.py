@@ -231,16 +231,16 @@ class Orchestrator:
             plan["warnings"] = list(risk.payload.get("warnings", []))
         if atr1h is None and verdict in ("long", "short"):
             plan["warnings"].append(
-                "no ATR was reported, so the stop is 1% of price, not a measured "
-                "range — treat the risk:reward as indicative only.")
+                "ما وصل ATR، فالوقف 1% من السعر وليس مدى مقيساً — "
+                "اعتبر المخاطرة/المكافأة إرشادية فقط.")
         if verdict == "no-trade" or px is None:
             if risk and not risk.payload.get("allowed", True):
-                why = "; ".join(risk.payload.get("blockers", [])) or "risk gate"
-                plan["levels_note"] = f"No trade: the risk gate blocked it ({why})."
+                why = "; ".join(risk.payload.get("blockers", [])) or "بوابة المخاطر"
+                plan["levels_note"] = f"لا صفقة: بوابة المخاطر أوقفتها ({why})."
             else:
                 plan["levels_note"] = (
-                    f"No trade: net bias {score:+.3f} is inside the neutral "
-                    f"band (±{self.settings.neutral_band:g}).")
+                    f"لا صفقة: الميل الصافي {score:+.3f} داخل النطاق المحايد "
+                    f"(±{self.settings.neutral_band:g}).")
             return plan
         sup = (levels.payload.get("supports") if levels else []) or []
         res = (levels.payload.get("resistances") if levels else []) or []
@@ -276,13 +276,14 @@ class Orchestrator:
             plan["rr"] = None
             plan["entry"] = plan["stop"] = None
             plan["levels_note"] = (
-                f"No trade: no level clears the {self.settings.min_rr:g} "
-                f"reward:risk minimum — the stop is wider than the reward.")
+                f"لا صفقة: ولا مستوى يحقّق الحد الأدنى للمخاطرة/المكافأة "
+                f"{self.settings.min_rr:g} — الوقف أوسع من المكافأة.")
             return plan
         if risk_dist:
             best = plan["targets"][0]
             plan["rr"] = round(abs(best["level"] - plan["entry"]) / risk_dist, 2)
-        plan["levels_note"] = "pivot = printed by the market; fib = measured leg; projection = one stop beyond."
+        plan["levels_note"] = ("محور = طبعه السوق؛ فيبوناتشي = ضلع مقيس؛ "
+                               "تقديري = وقف واحد بعده.")
         return plan
 
     # ---- the run -------------------------------------------------------
@@ -310,7 +311,7 @@ class Orchestrator:
         if run.verdict not in ("long", "short"):
             return False, "no directional call"
         if not run.recommendation.get("allowed", True):
-            return False, "risk gate blocked it"
+            return False, "بوابة المخاطر أوقفتها"
         if abs(run.score) < self.settings.alert_score:
             return False, f"conviction {run.score:+.2f} below {self.settings.alert_score}"
         fp = f"{run.symbol}:{run.verdict}:{round(run.score, 1)}"

@@ -8,6 +8,7 @@ decides *which side* the desk is allowed to trade, not the entry.
 
 from __future__ import annotations
 
+from .. import arabic as ar
 from .. import indicators as ind
 from .base import Agent, Study
 
@@ -52,8 +53,9 @@ class StructureAgent(Agent):
         conf = min(1.0, abs(norm) + 0.2)
 
         facts = "; ".join(
-            f"{tf}: {d.get('structure')} / {d.get('zone')} / {d.get('bos')}"
+            f"{tf}: {ar.structure(d.get('structure'))} / "
+            f"{ar.structure(d.get('zone'))} / {ar.bos(d.get('bos'))}"
             for tf, d in per.items())
-        summary = self.narrate(facts, "Summarise the market structure and bias.") or (
-            f"Structure is {stance}. " + facts)
+        summary = self.narrate(facts, "لخّص بنية السوق والميل.") or (
+            f"البنية {ar.stance(stance)}. " + facts)
         return Study(self.name, self.kind, stance, conf, norm, summary, {"frames": per})

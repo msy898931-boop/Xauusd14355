@@ -8,6 +8,7 @@ when it says no, the orchestrator may not issue a live entry.
 
 from __future__ import annotations
 
+from .. import arabic as ar
 from .. import indicators as ind
 from .base import Agent, Study
 
@@ -37,15 +38,15 @@ class RiskAgent(Agent):
         warnings = []
 
         if not q:
-            blockers.append("no live quote")
+            blockers.append("ما في تسعيرة حيّة")
         else:
             if q.get("market_state") and q["market_state"] != "open":
-                blockers.append(f"market {q['market_state']}")
+                blockers.append(f"السوق {ar.market_state(q['market_state'])}")
             if q.get("stale"):
-                blockers.append("quote is stale")
+                blockers.append("التسعيرة قديمة")
             age = q.get("quote_age_s")
             if isinstance(age, int) and age > 300:
-                blockers.append(f"quote {age}s old")
+                blockers.append(f"عمر التسعيرة {age} ثانية")
 
         # Imminent high-impact event, read from what the news agent published.
         # Two refinements over a flat "any high-impact event" rule:
@@ -64,25 +65,24 @@ class RiskAgent(Agent):
             relevant = [e for e in imminent
                         if not e.get("currency") or e.get("currency") == base_ccy]
             if relevant:
-                names = ", ".join(e.get("name", "?") for e in relevant[:3])
-                blockers.append(f"high-impact {base_ccy} event within "
-                                f"{self.settings.event_window_h:g}h ({names})")
+                names = ar.listing([ar.event_name(e.get("name")) for e in relevant])
+                blockers.append(f"حدث عالي التأثير بعملة {base_ccy} خلال "
+                                f"{self.settings.event_window_h:g} ساعة ({names})")
             elif imminent:
-                warnings.append("a high-impact event is near but not for this "
-                                "instrument's currency")
+                warnings.append("في حدث عالي التأثير قريب، بس مو بعملة هذا الأداة")
 
         h1 = data.get("1h") or []
         a = ind.atr(h1) if len(h1) > 20 else None
         px = self.live_price()
         atr_pct = (a / px * 100) if a and px else None
         if atr_pct is not None and atr_pct > 3.0:
-            warnings.append(f"1h ATR {atr_pct:.1f}% is very high — widen stops or stand aside")
+            warnings.append(f"تذبذب الساعة {atr_pct:.1f}% مرتفع جداً — وسّع الوقف أو ابقَ خارج السوق")
 
         allowed = not blockers
         # Risk is a gate: when it blocks, the score is neutral and confidence is
         # in the *decision*, not a direction.
-        summary = ("Trading allowed. " + ("; ".join(warnings) if warnings else "No blocking conditions.")
-                   ) if allowed else ("Trading blocked: " + "; ".join(blockers))
+        summary = ("التداول مسموح. " + ("؛ ".join(warnings) if warnings else "لا شروط مانعة.")
+                   ) if allowed else ("التداول موقوف: " + "؛ ".join(blockers))
         return Study(self.name, self.kind, "neutral", 1.0, 0.0, summary,
                      {"allowed": allowed, "blockers": blockers, "warnings": warnings,
                       "atr_pct_1h": atr_pct})
