@@ -106,3 +106,18 @@ it must not kill the process). Cadence clocks start at `-inf`, not 0, or the fir
 tick runs nothing. A container needs a volume at `DESK_HOME` or it re-sends alerts
 it already sent. Free Render has no worker/disk (~$7/mo for always-on).
 Detail → `2026-11-02.md`.
+
+## marketdesk: the inbound endpoint (2026-11-02, later)
+⭐ **A "web page" is not what makes hosting free — INBOUND traffic is.** A static
+page is free everywhere but serves files; the backend behind it has the same
+problem. What keeps a free host awake is a request ARRIVING: Render free sleeps
+after ~15 min without inbound traffic, and a **long poll is entirely OUTBOUND**,
+so polling could never wake a sleeping host — and the host sleeping would freeze
+the loop doing the polling. `desk daemon --web` serves `/health` (the ping that
+keeps it up) and a Telegram push route. The two Telegram transports are mutually
+exclusive (`getUpdates` is refused while a webhook is set), so `--web` is a MODE,
+not an addition. The per-update reply is ONE method (`handle_update`) shared by
+both, or the webhook becomes a silently diverging client. A forged POST is
+rejected in constant time BEFORE an action; a bad update answers 200, not 5xx, or
+Telegram redelivers it forever. And watch "configured ≠ working": I put
+`DESK_LEVEL_EVERY` in render.yaml before the CLI read it. Detail → `2026-11-02.md`.
