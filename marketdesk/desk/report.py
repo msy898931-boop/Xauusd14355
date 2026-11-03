@@ -29,6 +29,15 @@ def render(run: Run, lang: str = "ar") -> str:
     L: list[str] = []
     head = "قراءة السوق والتوصية" if lang == "ar" else "Market read & recommendation"
     L.append(f"=== {head} — {run.symbol} ===")
+    # A stand-down is not a reading: the desk never looked. Say so in one line
+    # rather than print a card of em dashes that reads like a data failure.
+    sess = r.get("session") or {}
+    if sess and not sess.get("open", True):
+        L.append(f"⏸ {sess.get('reason') or 'السوق مقفول'}")
+        if sess.get("opens_at"):
+            L.append(f"بيفتح: {sess['opens_at'][:16].replace('T', ' ')} UTC")
+        L.append("لا قراءة ولا توصية — المكتب بيستنّى افتتاح السوق.")
+        return "\n".join(L)
     q = (r.get("gather") or {}).get("quote") or {}
     L.append(f"السعر {_n(q.get('mid'), 3)} · السوق {ar.market_state(q.get('market_state'))} · "
              f"عمر التسعيرة {q.get('quote_age_s', '—')} ثانية · تغيّر اليوم {_n(q.get('day_diff_pct'), 2, '%')}")

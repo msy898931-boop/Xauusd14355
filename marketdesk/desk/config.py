@@ -84,6 +84,11 @@ class Settings:
     # whose nearest target sits closer than the stop is a losing proposition even
     # when the direction is right.
     min_rr: float = float(os.environ.get("DESK_MIN_RR", "1.5"))
+    # Stand down when the market is closed (the weekend, and Friday's close).
+    # The schedule is 24/7 and does not know the market closes; without this the
+    # desk reads a dead tape on a Saturday and spends the run for nothing. Set
+    # DESK_RESPECT_SESSION=0 to run the full desk on demand regardless.
+    respect_session: bool = os.environ.get("DESK_RESPECT_SESSION", "1") != "0"
 
     @property
     def shared_db(self) -> Path:

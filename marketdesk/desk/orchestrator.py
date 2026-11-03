@@ -16,6 +16,7 @@ a thread pool and any that overrun are reported as timed-out, never as neutral.
 from __future__ import annotations
 
 import concurrent.futures as cf
+import datetime as dt
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ from .agents import ROSTER, Study
 from .config import Settings
 from .llm import LLM
 from .memory import SharedMemory
+from .session import Session, market_session
 
 
 @dataclass
@@ -287,9 +289,48 @@ class Orchestrator:
         return plan
 
     # ---- the run -------------------------------------------------------
-    def run(self) -> Run:
+    def session_gate(self, now: dt.datetime | None = None) -> Session | None:
+        """The session, or None when the desk is set to ignore it.
+
+        A closed market is decided *before* any network call: the point is to not
+        spend the run at all, and gathering first would spend it and then throw
+        the result away. `None` means "no opinion, carry on".
+        """
+        if not self.settings.respect_session:
+            return None
+        return market_session(now)
+
+    def _stand_down(self, run_id: str, started: float, session: Session) -> Run:
+        """A run that never happened, recorded so the schedule stays visible.
+
+        It is written as `no-trade` with the session as the reason, not skipped
+        silently: a silent skip is indistinguishable from a broken workflow.
+        """
+        rec: dict = {"direction": "no-trade", "entry": None, "stop": None,
+                     "targets": [], "warnings": [],
+                     "levels_note": f"لا قراءة: {session.reason}.",
+                     "session": {"open": False, "reason": session.reason,
+                                 "opens_at": (session.opens_at.isoformat()
+                                              if session.opens_at else None)},
+                     "gather": {"symbol": self.settings.symbol, "candles": {},
+                                "quote": None, "errors": []},
+                     "errors": [], "llm": self.llm.stats(),
+                     "allowed": False, "score": 0.0, "weights_sum": 0.0,
+                     "bias": {"direction": "flat", "score": 0.0},
+                     "per_frame_bias": {}}
+        duration = time.time() - started
+        run = Run(run_id, self.settings.symbol, started, [], "no-trade", 0.0,
+                  rec, [], duration)
+        self.shared.save_run(run_id, self.settings.symbol, started, time.time(),
+                             "no-trade", 0.0, rec)
+        return run
+
+    def run(self, now: dt.datetime | None = None) -> Run:
         run_id = uuid.uuid4().hex[:12]
         started = time.time()
+        session = self.session_gate(now)
+        if session is not None and not session.is_open:
+            return self._stand_down(run_id, started, session)
         gather = self.gather()
         studies, errors = self.dispatch(run_id)
         errors = list(gather["errors"]) + errors
@@ -309,6 +350,9 @@ class Orchestrator:
         """Is this run worth alerting? Only a live, non-neutral call clears the
         bar. A `no-trade` run is the desk working, not news."""
         if run.verdict not in ("long", "short"):
+            sess = (run.recommendation or {}).get("session") or {}
+            if sess and not sess.get("open", True):
+                return False, sess.get("reason") or "السوق مقفول"
             return False, "no directional call"
         if not run.recommendation.get("allowed", True):
             return False, "بوابة المخاطر أوقفتها"

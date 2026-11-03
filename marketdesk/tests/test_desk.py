@@ -2248,3 +2248,184 @@ def test_the_near_message_says_it_is_not_a_break_yet():
     text = near_message(DEFAULT_LEVELS[0], 3925.0, 6.0)
     assert "اقتراب" in text and "6.0" in text
     assert "لسا ما انكسر" in text               # the honest caveat
+
+
+# ---- market session ---------------------------------------------------
+
+def _utc(y, mo, d, h=0, mi=0):
+    import datetime as dt
+    return dt.datetime(y, mo, d, h, mi, tzinfo=dt.UTC)
+
+
+def test_session_open_midweek():
+    from desk.session import market_session
+    # Wednesday, midday UTC -- the heart of the week.
+    s = market_session(_utc(2026, 11, 4, 12, 0))
+    assert s.is_open and bool(s) is True
+
+
+def test_session_closed_on_saturday():
+    from desk.session import market_session
+    s = market_session(_utc(2026, 11, 7, 12, 0))     # Saturday
+    assert not s.is_open and bool(s) is False
+    assert "السبت" in s.reason
+    assert s.opens_at is not None and s.opens_at.weekday() == 6   # Sunday
+
+
+def test_session_closed_after_friday_close():
+    from desk.session import market_session
+    assert market_session(_utc(2026, 11, 6, 20, 59)).is_open is True    # before
+    assert market_session(_utc(2026, 11, 6, 21, 0)).is_open is False    # at the bell
+
+
+def test_session_sunday_opens_at_2200_utc():
+    from desk.session import market_session
+    assert market_session(_utc(2026, 11, 8, 21, 59)).is_open is False   # Sunday, pre-open
+    assert market_session(_utc(2026, 11, 8, 22, 0)).is_open is True     # Sunday, open
+
+
+def test_naive_datetime_is_read_as_utc_not_crashed():
+    import datetime as dt
+
+    from desk.session import market_session
+    # A naive value is a caller bug; it must resolve, not raise mid-run.
+    s = market_session(dt.datetime(2026, 11, 4, 12, 0))
+    assert s.is_open
+
+
+def test_a_closed_market_stands_down_without_touching_the_network(tmp_path, monkeypatch):
+    """The whole point of the gate: a closed market must not spend the run. If
+    any source were called, this test would fail rather than pass quietly."""
+    import desk.orchestrator as orch
+    from desk.session import Session
+
+    s = _settings(tmp_path)
+    desk = Orchestrator(s)
+
+    def boom(*a, **k):
+        raise AssertionError("the network was touched on a closed market")
+
+    monkeypatch.setattr("desk.sources.fetch_candles", boom)
+    monkeypatch.setattr("desk.sources.fetch_quote", boom)
+    monkeypatch.setattr("desk.sources.fetch_news", boom)
+    monkeypatch.setattr("desk.sources.fetch_calendar", boom)
+    monkeypatch.setattr(orch, "market_session",
+                        lambda now=None: Session(False, "السوق مقفول (السبت)", None))
+    run = desk.run(now=_utc(2026, 11, 7, 12, 0))
+    assert run.verdict == "no-trade"
+    assert run.studies == []
+    assert run.recommendation["session"]["open"] is False
+    assert run.recommendation["allowed"] is False
+    assert "لا قراءة" in run.recommendation["levels_note"]
+
+
+def test_a_closed_market_is_never_actionable(tmp_path, monkeypatch):
+    """A stand-down must never alert; and it must say *why* (the session), not
+    the generic 'no directional call'."""
+    import desk.orchestrator as orch
+    from desk.session import Session
+
+    desk = Orchestrator(_settings(tmp_path))
+    monkeypatch.setattr(orch, "market_session",
+                        lambda now=None: Session(False, "السوق مقفول (السبت)", None))
+    run = desk.run(now=_utc(2026, 11, 7, 12, 0))
+    ok, reason = desk.actionable(run)
+    assert ok is False
+    assert "السبت" in reason
+
+
+def test_respect_session_off_lets_the_desk_run_anyway(tmp_path, monkeypatch):
+    """DESK_RESPECT_SESSION=0 is the on-demand escape hatch: a Saturday run still
+    produces a full reading."""
+    s = _settings(tmp_path)
+    s.respect_session = False
+    desk = Orchestrator(s)
+    bars = _bars(120)
+    monkeypatch.setattr("desk.sources.fetch_candles", lambda sym, tf, limit=1000: bars)
+    monkeypatch.setattr("desk.sources.fetch_quote",
+                        lambda sym: {"mid": bars[-1]["close"], "bid": 1, "ask": 1,
+                                     "market_state": "open", "stale": False,
+                                     "quote_age_s": 0, "day_diff_pct": 1.0,
+                                     "source": "test"})
+    monkeypatch.setattr("desk.sources.fetch_news", lambda symbol=None, max_results=25: [])
+    monkeypatch.setattr("desk.sources.fetch_calendar", lambda importance="high", limit=100: [])
+    monkeypatch.setattr("desk.sources.fetch_summary", lambda: {})
+    run = desk.run(now=_utc(2026, 11, 7, 12, 0))
+    assert run.studies, "with the session ignored the agents must still run"
+
+
+def test_the_stand_down_card_says_it_did_not_look(tmp_path, monkeypatch):
+    import desk.orchestrator as orch
+    from desk.report import render
+    from desk.session import Session
+
+    desk = Orchestrator(_settings(tmp_path))
+    monkeypatch.setattr(orch, "market_session",
+                        lambda now=None: Session(False, "السوق مقفول (السبت)", None))
+    run = desk.run(now=_utc(2026, 11, 7, 12, 0))
+    card = render(run)
+    assert "السوق مقفول" in card
+    assert "لا قراءة ولا توصية" in card
+    assert "دراسات الوكلاء" not in card
+
+
+# ---- gold relevance filter --------------------------------------------
+
+def test_relevance_keeps_gold_drivers():
+    from desk.agents.news_agent import is_gold_relevant
+    assert is_gold_relevant("Gold rallies as the Fed signals a rate cut")
+    assert is_gold_relevant("Dollar weakens, bullion climbs")
+    assert is_gold_relevant("Treasury yields fall on soft inflation data")
+    assert is_gold_relevant("Gold holds as Middle East tension escalates")
+
+
+def test_relevance_drops_unrelated_headlines():
+    from desk.agents.news_agent import is_gold_relevant
+    # The exact headlines a live pull returned under symbol=XAUUSD.
+    assert not is_gold_relevant("Apple and Palantir shares slide in premarket trading")
+    assert not is_gold_relevant("North Korea denies involvement in Binance hack")
+    assert not is_gold_relevant("Anthropic Investors Push for Cautious Valuation")
+
+
+def test_news_scores_only_relevant_headlines_and_reports_the_rest(tmp_path, monkeypatch):
+    """The tone must be computed from gold headlines only, and the count of
+    dropped ones must be visible -- a tone from 1 of 4 headlines is a different
+    claim from a tone over all 4."""
+    s = _settings(tmp_path)
+    desk = Orchestrator(s)
+    agent = next(a for a in desk.agents if a.name == "news")
+    agent.llm.key = ""                      # deterministic: no model
+
+    def feed(symbol=None, max_results=25):
+        return [
+            {"title": "Gold rallies on safe-haven demand", "description": "", "url": "a"},
+            {"title": "Apple shares slide in premarket trading", "description": "", "url": "b"},
+            {"title": "Aramco profit jumps despite pipeline attacks", "description": "", "url": "c"},
+            {"title": "Dollar weakens as Fed hints at rate cut", "description": "", "url": "d"},
+        ]
+
+    monkeypatch.setattr("desk.sources.fetch_news", feed)
+    monkeypatch.setattr("desk.sources.fetch_calendar", lambda importance="high", limit=100: [])
+    st = agent.run("r1")
+    assert st.payload["fetched"] == 4
+    assert st.payload["dropped_irrelevant"] == 2
+    assert len(st.payload["headlines"]) == 2
+    assert "من أصل 4" in st.summary
+
+
+def test_news_says_so_when_nothing_is_about_gold(tmp_path, monkeypatch):
+    """An all-irrelevant feed must not silently read as neutral-and-fine; the
+    desk says there is no gold news rather than a tone of zero."""
+    s = _settings(tmp_path)
+    desk = Orchestrator(s)
+    agent = next(a for a in desk.agents if a.name == "news")
+    agent.llm.key = ""
+    monkeypatch.setattr("desk.sources.fetch_news",
+                        lambda symbol=None, max_results=25: [
+                            {"title": "Apple shares slide", "description": "", "url": "a"},
+                            {"title": "Crypto exchange hacked", "description": "", "url": "b"}])
+    monkeypatch.setattr("desk.sources.fetch_calendar", lambda importance="high", limit=100: [])
+    st = agent.run("r1")
+    assert st.payload["dropped_irrelevant"] == 2
+    assert st.payload["headlines"] == []
+    assert "ما في عنوان يخصّ الذهب" in st.summary
