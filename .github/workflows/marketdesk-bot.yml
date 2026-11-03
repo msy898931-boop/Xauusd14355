@@ -33,6 +33,10 @@ on:
         description: "Publish the button menu to the chat (run once to get the buttons)"
         type: boolean
         default: false
+      listen_seconds:
+        description: "How long to stay connected to Telegram. Default 200s fits the 5-minute cron; a manual run may go longer."
+        type: number
+        default: 200
 
 concurrency:
   group: marketdesk-bot
@@ -44,7 +48,9 @@ permissions:
 jobs:
   poll:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    # A manual run may listen longer than the cron window, so the job ceiling is
+    # set by the longest listen we allow, not by the 5-minute schedule.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -77,14 +83,15 @@ jobs:
             if [ -z "$val" ]; then echo "$v: MISSING"; else echo "$v: set (length ${#val})"; fi
           done
 
-      # 200s of listening inside a 5-minute cron, leaving room for the ~45s of
+      # 200s of listening inside a 5-minute cron leaves room for the ~45s of
       # checkout + install: the run ends with margin, and the next one starts
-      # after it. A press lands in about a second.
+      # after it. A press lands in about a second. A manual dispatch may pass a
+      # longer `listen_seconds` for a hands-on session.
       - name: Listen for presses
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
-          python3 -m desk.cli bot --listen --seconds 200 \
+          python3 -m desk.cli bot --listen --seconds ${{ inputs.listen_seconds || 200 }} \
             ${{ inputs.publish_menu && '--greet' || '' }}
