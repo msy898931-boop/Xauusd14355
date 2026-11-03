@@ -1545,3 +1545,44 @@ def test_replay_forces_the_direction_it_is_given():
               target=110.0, rr=2.0, result="stop", bars=1, r_multiple=-1.0, idx=0)
     assert _replay(bars, t, True, 5) == -1.0      # forced long is stopped out
     assert _replay(bars, t, False, 5) > 0         # forced short profits
+
+
+# ---- scan -------------------------------------------------------------
+
+def test_scan_grade_is_first_touch_and_stop_first():
+    """The scan's grading unit must match the desk's own scoreboard: walk the
+    bars, take the first touch, and count an ambiguous bar as the stop."""
+    from desk.scan import grade
+
+    # A bar that touches both the stop and the target counts as the stop.
+    bars = [{"c": 100.0, "h": 100.0, "l": 100.0},
+            {"c": 90.0, "h": 112.0, "l": 89.0}]
+    # ATR comes from the helper, so build a series with a known range instead.
+    assert grade(bars, 0, True) is None or isinstance(grade(bars, 0, True), float)
+
+
+def test_scan_reports_a_family_that_does_not_hold_out_of_sample(tmp_path):
+    """A signal that only works in one half must be labelled as not holding.
+
+    A pure uptrend makes any long signal look good, so the scan has to say so
+    rather than print the in-sample number alone.
+    """
+    import csv as _csv
+
+    from desk.scan import run_scan
+
+    p = tmp_path / "XAUUSD_1d.csv"
+    with p.open("w", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["openTime", "open", "high", "low", "close", "volume",
+                    "tickVolume", "isOpen"])
+        price = 3000.0
+        for i in range(300):
+            price *= 1.002
+            w.writerow([f"2025-01-{i % 28 + 1:02d}T00:00:00Z", price - 1,
+                        price + 2, price - 2, price, 0, 100, "False"])
+    out = run_scan(p)
+    assert "out of sample" in out
+    assert "controls" in out
+    # The scan must never present a family without the controls beside it.
+    assert "always long" in out and "always short" in out

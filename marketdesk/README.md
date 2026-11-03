@@ -299,3 +299,20 @@ It reports expectancy in R, not just a hit rate, because 60% at 1.2R loses money
 Read the confidence interval before the mean: a positive expectancy whose CI
 spans zero is not an edge. The current daily-bar sample shows **no proven edge**,
 and the command says so rather than rounding up.
+
+## Signal scan
+
+`desk scan` asks the question the backtest cannot: is there any edge in this data
+at all? It tests five standard signal families on every daily bar with no
+selection and no tuning, prints the constant-direction controls beside each, and
+splits the sample in two so a signal that only lives in one half is visible.
+
+```
+cd marketdesk && python3 -m desk.cli scan
+```
+
+Two rules make it trustworthy. Five families is five chances to get lucky, so
+significance is Bonferroni-corrected. And every family is split in and out of
+sample. A family that is significant *and* holds out of sample is worth building
+on; anything else is a regime or a fluke. The scan is evidence for what to build
+next, not a strategy.
