@@ -306,6 +306,10 @@ def cmd_bot(args) -> int:
     Run from a schedule, not in a loop. Telegram confirms the updates when the
     offset is sent back at the end of the pass, so a fresh runner with no disk
     still never replays a press.
+
+    `--listen` keeps the pass connected instead: it long-polls Telegram and
+    answers the moment something is pressed, for `--seconds`. That is what turns
+    a reply that lands on the next pass into one that lands in about a second.
     """
     import json
 
@@ -319,7 +323,10 @@ def cmd_bot(args) -> int:
     if args.greet:
         # Publish the menu once, so the buttons exist in the chat.
         bot.send(_menu_text(s), keyboard=True)
-    out = bot.poll(offset=args.offset, budget_s=args.budget)
+    if args.listen:
+        out = bot.listen(seconds=args.seconds, max_replies=args.max_replies)
+    else:
+        out = bot.poll(offset=args.offset, budget_s=args.budget)
     print(json.dumps(out, ensure_ascii=False))
     # A failed pass must be a red run, not a green one that answered nothing.
     return 0 if out.get("ok") else 1
@@ -430,6 +437,12 @@ def main(argv=None) -> int:
                    help="seconds to spend answering before deferring the rest")
     b.add_argument("--greet", action="store_true",
                    help="also publish the menu before polling")
+    b.add_argument("--listen", action="store_true",
+                   help="stay connected and answer presses as they arrive")
+    b.add_argument("--seconds", type=int, default=300,
+                   help="how long --listen stays connected")
+    b.add_argument("--max-replies", type=int, default=8,
+                   help="cap on replies per poll inside --listen")
     b.set_defaults(func=cmd_bot)
 
     mn = sub.add_parser("menu", help="publish the button menu to the chat")

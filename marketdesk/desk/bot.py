@@ -49,10 +49,15 @@ class TelegramError(RuntimeError):
     not look the same from outside, or a dead bot reads as a quiet one.
     """
 
+# The menu, in reading order: act first, then read, then the reference tools.
+# Two per row keeps it legible on a phone; nine buttons is the most that fits
+# above the fold without scrolling.
 MENU: list[list[tuple[str, str]]] = [
-    [("📊 تحليل الآن", "analysis")],
-    [("🎯 التوصية الحالية", "recommend"), ("📋 آخر تقرير", "report")],
-    [("⏱️ حالة السوق", "market"), ("📈 معدل النجاح", "hitrate")],
+    [("📊 تحليل الآن", "analysis"), ("🎯 التوصية", "recommend")],
+    [("📈 الخطة الكاملة", "plan"), ("⏱️ السوق", "market")],
+    [("🔔 المستويات", "levels"), ("📚 دراسة الذهب", "gold")],
+    [("📋 آخر تقرير", "report"), ("📈 معدل النجاح", "hitrate")],
+    [("❓ مساعدة", "help")],
 ]
 
 # Plain text a person types, mapped to the same actions the buttons use. A
@@ -60,11 +65,13 @@ MENU: list[list[tuple[str, str]]] = [
 # owner who types "تحليل" and hears nothing back is worse than one who is shown
 # the buttons.
 TEXT_ACTIONS: dict[str, str] = {
-    "/start": "menu", "/menu": "menu", "/help": "menu",
+    "/start": "menu", "/menu": "menu", "/help": "help",
     "/analysis": "analysis", "/recommend": "recommend", "/report": "report",
-    "/market": "market", "/hitrate": "hitrate",
+    "/market": "market", "/hitrate": "hitrate", "/plan": "plan",
+    "/levels": "levels", "/gold": "gold",
     "تحليل": "analysis", "توصية": "recommend", "تقرير": "report",
-    "سوق": "market", "نجاح": "hitrate", "قائمة": "menu", "مساعدة": "menu",
+    "سوق": "market", "نجاح": "hitrate", "خطة": "plan", "مستويات": "levels",
+    "ذهب": "gold", "قائمة": "menu", "مساعدة": "help", "رجوع": "menu",
 }
 
 
@@ -181,8 +188,48 @@ class TelegramBot:
             return False
 
     # ---- the one pass --------------------------------------------------
+    def listen(self, orchestrator=None, *, seconds: int = 300,
+               max_replies: int = 8, poll_s: int = 50) -> dict:
+        """Stay connected and answer presses for `seconds`, not once.
+
+        This is what removes the up-to-five-minute wait. `poll()` makes one
+        `getUpdates` call and exits, so a press is answered on the NEXT scheduled
+        pass; here the call blocks for `poll_s` seconds on Telegram's side and
+        returns the moment something is pressed, then loops. A press is answered
+        in about a second, and the runner still costs one job.
+
+        The loop stops at the deadline so the job ends cleanly rather than being
+        killed mid-answer, and it stops early on a transport failure -- retrying
+        a rejected token for five minutes would just burn the runner.
+        """
+        if not self.available:
+            return {"ok": False, "reason": "not configured"}
+        started = time.time()
+        handled: list[str] = []
+        offset: int | None = None
+        passes = 0
+        try:
+            while time.time() - started < seconds:
+                left = seconds - (time.time() - started)
+                out = self.poll(orchestrator, offset=offset,
+                                budget_s=max(20.0, min(left, 240.0)),
+                                max_replies=max_replies,
+                                wait_s=min(poll_s, max(1, int(left))))
+                passes += 1
+                if not out.get("ok"):
+                    return {**out, "handled": handled, "passes": passes,
+                            "listened_s": round(time.time() - started, 1)}
+                offset = out.get("next_offset", offset)
+                handled.extend(out.get("handled") or [])
+        except KeyboardInterrupt:
+            pass
+        return {"ok": True, "handled": handled, "passes": passes,
+                "listened_s": round(time.time() - started, 1),
+                "next_offset": offset}
+
     def poll(self, orchestrator=None, *, offset: int | None = None,
-             budget_s: float = 120.0, max_replies: int = 5) -> dict:
+             budget_s: float = 120.0, max_replies: int = 5,
+             wait_s: int = 0) -> dict:
         """Read the pending presses and messages and answer each. Returns a small
         summary.
 
@@ -202,7 +249,7 @@ class TelegramBot:
             return {"ok": False, "reason": "not configured"}
         started = time.time()
         try:
-            updates = self.get_updates(offset)
+            updates = self.get_updates(offset, timeout=wait_s)
         except TelegramError as exc:
             # Report the failure as itself. Returning an empty pass would make a
             # rejected token look like a quiet chat.

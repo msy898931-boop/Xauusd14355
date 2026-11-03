@@ -1885,3 +1885,147 @@ def test_gold_study_reports_both_sides_with_expectancy(tmp_path):
     assert "SHORT" in out and "LONG" in out
     assert "expectancy R" in out
     assert "base" in out          # the base rate must be shown beside it
+
+
+# ---- the expanded menu and the listen loop ----------------------------
+
+def test_menu_has_two_columns_and_no_duplicate_actions():
+    """A menu is a UI: a duplicate action is a button that does nothing new."""
+    from desk.bot import MENU
+
+    actions = [a for row in MENU for _, a in row]
+    assert len(actions) == len(set(actions)), "duplicate button action"
+    assert all(len(row) <= 2 for row in MENU), "rows must fit a phone"
+    assert len(MENU) <= 6, "menu must fit above the fold"
+
+
+def test_every_button_has_a_handler(tmp_path, monkeypatch):
+    """A button that returns 'unknown action' is a broken button."""
+    from desk.actions import Actions
+    from desk.bot import MENU
+
+    acts = Actions(_settings(tmp_path))
+    for row in MENU:
+        for _label, action in row:
+            out = acts.run(action)
+            assert out, f"{action} returned nothing"
+            assert "زر غير معروف" not in out, f"{action} has no handler"
+
+
+def test_help_and_menu_are_different_answers(tmp_path):
+    """'help' explains; 'menu' is the short greeting. Merging them loses one."""
+    from desk.actions import Actions
+
+    acts = Actions(_settings(tmp_path))
+    assert acts.help() != acts.menu_text()
+    assert "الأزرار" in acts.help()
+
+
+def test_typed_words_map_to_the_new_actions():
+    from desk.bot import action_for_text
+
+    assert action_for_text("خطة") == "plan"
+    assert action_for_text("مستويات") == "levels"
+    assert action_for_text("ذهب") == "gold"
+    assert action_for_text("/plan") == "plan"
+    assert action_for_text("رجوع") == "menu"
+    assert action_for_text("شي ما بيعني شي") == "menu"
+
+
+def test_listen_answers_a_press_then_stops_at_the_deadline(tmp_path, monkeypatch):
+    """The listen loop must return on its own, not run until the job is killed."""
+    from desk.bot import TelegramBot
+
+    bot, calls = _fake_bot(tmp_path, monkeypatch, updates=[_press(3, "market")])
+    monkeypatch.setattr(TelegramBot, "send", lambda self, text, **kw: True)
+
+    class FakeActions:
+        def __init__(self, *a, **k): pass
+        def run(self, action): return f"answer:{action}"
+
+    monkeypatch.setattr("desk.actions.Actions", FakeActions)
+    # A one-second window: the first pass answers the press, the second finds the
+    # deadline passed and exits. That is the loop's real shape, not a special case.
+    out = bot.listen(seconds=1, poll_s=1)
+    assert out["ok"] is True
+    assert out["passes"] >= 1
+    assert "listened_s" in out
+    assert out["handled"] == ["market"]
+
+
+def test_listen_uses_a_long_poll_not_a_busy_loop(tmp_path, monkeypatch):
+    """`timeout` must be sent, or the loop spins and burns the runner."""
+    from desk.bot import TelegramBot
+
+    bot, calls = _fake_bot(tmp_path, monkeypatch, updates=[])
+    monkeypatch.setattr(TelegramBot, "send", lambda self, text, **kw: True)
+    bot.poll(offset=None, wait_s=50)
+    gets = [p for m, p in calls if m == "getUpdates"]
+    assert gets and gets[0].get("timeout") == 50
+
+
+def test_listen_stops_on_a_transport_failure_instead_of_retrying(tmp_path, monkeypatch):
+    """A rejected token must end the run, not be retried for five minutes."""
+    from desk.bot import TelegramBot
+
+    bot, _ = _fake_bot(tmp_path, monkeypatch, updates=[])
+
+    import urllib.error
+
+    def boom(self, method, payload, timeout=20):
+        raise urllib.error.HTTPError("u", 401, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(TelegramBot, "_call", boom)
+    out = bot.listen(seconds=300)
+    assert out["ok"] is False
+    assert out["passes"] == 1        # it gave up immediately
+
+
+def test_plan_button_builds_a_two_sided_answer(tmp_path):
+    """The plan button must show both sides, with a stop each."""
+    from desk.actions import Actions
+
+    acts = Actions(_settings(tmp_path))
+    csv = tmp_path / "XAUUSD_1d.csv"
+    _plan_csv(csv, n=120)
+    acts.settings.symbol = "XAUUSD"
+    import desk.actions as mod
+    real = mod.Actions._long_csv
+    mod.Actions._long_csv = lambda self: csv
+    try:
+        out = acts.run("plan")
+    finally:
+        mod.Actions._long_csv = real
+    assert "شراء مشروط" in out and "بيع مشروط" in out
+    assert "الوقف" in out
+    assert "الأهداف" in out
+
+
+def test_no_button_double_escapes_its_markup(tmp_path, monkeypatch):
+    """A button that builds its own `<b>` must not be escaped again, or the chat
+    prints `&lt;b&gt;` at the user. This is the bug the expanded menu shipped with."""
+    from desk.actions import Actions
+    from desk.bot import MENU
+
+    acts = Actions(_settings(tmp_path))
+    for row in MENU:
+        for label, action in row:
+            out = acts.run(action)
+            assert "&lt;" not in out, f"{label} double-escaped its markup"
+            assert "&amp;" not in out, f"{label} double-escaped an ampersand"
+
+
+def test_plain_text_buttons_escape_a_stray_ampersand(tmp_path, monkeypatch):
+    """The other half of the rule: an agent summary with `&` must be escaped, or
+    Telegram rejects the whole message for an unknown entity."""
+    from desk.actions import Actions
+    from desk.bot import MENU
+
+    acts = Actions(_settings(tmp_path))
+    monkeypatch.setattr(acts, "hitrate", lambda: "R&D hit 60%")
+    assert "&amp;" in acts.run("hitrate")
+    assert action_in_menu(MENU, "hitrate")
+
+
+def action_in_menu(menu, action):
+    return any(a == action for row in menu for _l, a in row)
