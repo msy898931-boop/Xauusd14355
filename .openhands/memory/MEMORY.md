@@ -193,3 +193,18 @@ layers, each of which alone looked like "the bot is broken":
   because the harness injects secrets only into the command that STARTS a process.
   Test the alert path from the cloud workflow, never locally.
 Detail → `2026-11-02.md`.
+- ⭐ **A currency tag is not a transmission channel.** A USD-tagged economic
+  release is not automatically a *dollar* event: `EIA Crude Oil Stocks Change`
+  is an oil-supply figure and must not vote on gold. The surprise agent scores a
+  curated allowlist and reports what it dropped — the same "whitelist, not
+  blacklist" rule the news agent uses for headlines. And the sign is per-release:
+  a higher Unemployment Rate / Jobless Claims WEAKENS the dollar (gold-positive),
+  the reverse of a payroll or PMI beat. **Never assume one sign for all releases.**
+- ⭐ **`actual=0.0` is a reading; a missing forecast is not a zero.** A calendar
+  row with no forecast has no surprise to measure → return `None`, not `0.0`
+  (0.0 claims "met expectations" when there was no expectation). No fresh print =
+  no vote, not a neutral zero averaged in.
+- **Audit for data stored but never read before adding anything.** `calendar.actual`
+  was fetched, stored, and read by no one; `tick_volume` is in every bar and every
+  `indicators.py` signature and used by no agent. The cheapest feature is often
+  already in the DB. (Surprise agent added 2026-11-02 → `2026-11-02.md`.)

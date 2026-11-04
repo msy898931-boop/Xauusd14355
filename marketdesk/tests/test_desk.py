@@ -3621,3 +3621,37 @@ def test_surprise_is_in_the_roster(tmp_path):
 
     assert SurpriseAgent in ROSTER
 
+
+def test_surprise_vote_reaches_the_final_verdict(tmp_path, monkeypatch):
+    """End to end through the orchestrator: a fresh USD surprise must move the
+    weighted score, not merely appear on the board. This is the wiring the desk
+    insists on -- an agent whose vote never reaches the verdict is decoration."""
+    bars = _bars(120)
+
+    def run_with(cal):
+        s = _settings(tmp_path / f"home-{len(cal)}-{abs(hash(str(cal)))}")
+        s.home.mkdir(parents=True, exist_ok=True)
+        desk = Orchestrator(s)
+        monkeypatch.setattr("desk.sources.fetch_candles", lambda sym, tf, limit=1000: bars)
+        monkeypatch.setattr("desk.sources.fetch_quote",
+                            lambda sym: {"mid": bars[-1]["close"], "bid": 1, "ask": 1,
+                                         "market_state": "open", "stale": False,
+                                         "quote_age_s": 0, "day_diff_pct": 1.0,
+                                         "source": "test"})
+        monkeypatch.setattr("desk.sources.fetch_news", lambda symbol=None, max_results=25: [])
+        monkeypatch.setattr("desk.sources.fetch_calendar",
+                            lambda importance="high", limit=100: cal)
+        monkeypatch.setattr("desk.sources.fetch_summary", lambda: {})
+        run = desk.run()
+        return run, {st.agent: st for st in run.studies}
+
+    quiet, _ = run_with([])
+    loud, by = run_with([_cal_event("ISM Services PMI", 62.0, 55.2)])
+
+    # A big USD beat -> dollar stronger -> gold-negative study.
+    assert by["surprise"].stance == "bear"
+    assert by["surprise"].score < 0
+    # ... and it must actually move the verdict's weighted score. If the agent's
+    # weight were dropped, the two runs would be identical.
+    assert loud.score < quiet.score, "the surprise vote must reach the tally"
+
