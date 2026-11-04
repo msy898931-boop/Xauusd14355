@@ -47,6 +47,10 @@ on:
         description: "How long to stay connected to Telegram. Default 200s fits the 5-minute cron; a manual run may go longer."
         type: number
         default: 200
+      clear_webhook:
+        description: "Delete a stale/dead webhook so getUpdates (poll) works again"
+        type: boolean
+        default: false
 
 concurrency:
   group: marketdesk-bot
@@ -97,11 +101,21 @@ jobs:
       # webhook OR to getUpdates, never both: while the Render daemon has a
       # webhook registered, every poll here fails with a bare 409. Asking first
       # turns that into a clear, non-fatal note instead of a red run.
+      #
+      # A DEAD webhook is worse than none: Telegram keeps pushing updates to a
+      # URL that answers 502/404, so the presses never reach either transport and
+      # the chat looks broken while the token is perfectly valid. `clear_webhook`
+      # is the repair -- it deletes the stale registration so the poll below can
+      # drain the backlog.
       - name: Which transport is Telegram serving?
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python3 -m desk.cli telegram || true
+        run: |
+          python3 -m desk.cli telegram || true
+          if [ "${{ inputs.clear_webhook }}" = "true" ]; then
+            python3 -m desk.cli telegram --clear-webhook || true
+          fi
 
       # 200s of listening inside a 5-minute cron leaves room for the ~45s of
       # checkout + install: the run ends with margin, and the next one starts

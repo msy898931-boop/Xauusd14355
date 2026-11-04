@@ -460,6 +460,13 @@ def cmd_telegram(args) -> int:
     if not bot.available:
         print("result: NOT CONFIGURED — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
         return 2
+    if getattr(args, "clear_webhook", False):
+        ok = bot.delete_webhook()
+        print(f"deleteWebhook: {'ok' if ok else 'FAILED'}")
+        info = bot.webhook_info()
+        still = (info.get("url") or "") if info else ""
+        print(f"webhook now: {still or 'none (getUpdates will work)'}")
+        return 0 if ok and not still else 1
     info = bot.webhook_info()
     if not info:
         print("result: UNREADABLE — the token is rejected or the API is unreachable")
@@ -614,6 +621,9 @@ def main(argv=None) -> int:
 
     tg = sub.add_parser(
         "telegram", help="ask Telegram what transport this bot actually uses")
+    tg.add_argument("--clear-webhook", action="store_true",
+                    help="delete a registered webhook so getUpdates (the poll "
+                         "transport) works again; use when a dead host left one")
     tg.set_defaults(func=cmd_telegram)
 
     args = p.parse_args(argv)
