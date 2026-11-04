@@ -3209,6 +3209,37 @@ def _webhook(tmp_path, monkeypatch, *, secret="s3cr3t", port=18099, bot=None):
     return srv
 
 
+def test_health_reports_the_deployed_commit(monkeypatch):
+    """The desk is silent by design, so a green /health cannot by itself say
+    which code is live. The marker is what makes 'is the fix deployed?'
+    answerable from outside -- and it must be the commit Render built, not a
+    version string that drifts."""
+    from desk import webhook
+
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "56c1309abcdef1234567890")
+    assert webhook.build_marker() == "56c1309abcde"
+
+
+def test_health_marker_falls_back_to_the_version_off_render(monkeypatch):
+    """Locally there is no deployed commit to name, so the honest answer is the
+    package version -- never a guess at a SHA that was never built."""
+    from desk import __version__, webhook
+
+    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    assert webhook.build_marker() == f"v{__version__}"
+
+
+def test_health_endpoint_exposes_the_build_marker(tmp_path, monkeypatch):
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "deadbeefcafe0000")
+    srv = _webhook(tmp_path, monkeypatch, port=18097)
+    try:
+        status, body = _get(srv.port, "/health")
+        assert status == 200
+        assert body["ok"] is True and body["build"] == "deadbeefcafe"
+    finally:
+        srv.stop()
+
+
 def test_webhook_health_answers_so_a_free_host_does_not_sleep(tmp_path, monkeypatch):
     """`/health` is the whole reason a free host stays awake: the ping is inbound
     traffic, and a long poll (all outbound) would never be."""

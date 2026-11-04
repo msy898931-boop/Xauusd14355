@@ -208,3 +208,17 @@ Detail → `2026-11-02.md`.
   was fetched, stored, and read by no one; `tick_volume` is in every bar and every
   `indicators.py` signature and used by no agent. The cheapest feature is often
   already in the DB. (Surprise agent added 2026-11-02 → `2026-11-02.md`.)
+- ⭐ **Test the naive use of unused data before building on it — then find its
+  real home.** `tick_volume` as a *directional* signal failed (breakout on high
+  volume, n=8, 38%). As a *volatility* input it is real: 1h bar >1.2x its 20-bar
+  avg → 1.55x wider next range (Welch t=3.96, CI [1.25,1.91]), and **additive to
+  ATR** (partial r=+0.385; ATR alone only r=+0.13). It now widens the stop, never
+  picks a side — and only ever widens, since a quiet bar is the absence of a
+  signal, not a reason to tighten into noise.
+- ⭐ **A number and its verb are one fact.** A live line read "وسّعنا الوقف 0.90×"
+  (widened 0.90x) when 0.9x *tightens*. When code prints a magnitude with a
+  direction word, test the direction, not just the value.
+- **Test fixture trap:** marketdesk's `_wave()` repeats hour-of-day every 24 bars,
+  so `load_candles` collapses it to 24 hourly bars — editing the "last" raw bar
+  then does NOT change the last 1h bar. Space timestamps hourly when a test must
+  control the newest closed bar.

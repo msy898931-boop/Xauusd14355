@@ -29,8 +29,11 @@ from __future__ import annotations
 
 import hmac
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from . import __version__
 
 # Telegram caps an update well below this; the limit exists so a hostile body
 # cannot make the reader allocate without bound.
@@ -39,6 +42,19 @@ MAX_BODY = 1 << 20          # 1 MiB
 # but a fixed path keeps the routing trivial and the surface small.
 WEBHOOK_PATH = "/telegram"
 HEALTH_PATH = "/health"
+
+
+def build_marker() -> str:
+    """The code revision this process is running, for `/health` to report.
+
+    A static version string would drift from what is actually deployed -- the
+    same "configured is not working" trap the desk names elsewhere. Render
+    injects the deployed commit as `RENDER_GIT_COMMIT`; where there is none (a
+    local run, a test) the package version is the honest answer, not a guess at
+    a commit that was never built.
+    """
+    sha = os.environ.get("RENDER_GIT_COMMIT", "").strip()
+    return sha[:12] if sha else f"v{__version__}"
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -77,7 +93,12 @@ class _Handler(BaseHTTPRequestHandler):
         is also the honest answer to 'is the process up' -- the desk is silent by
         design, so its logs alone cannot be pinged."""
         if self.path.split("?")[0] in (HEALTH_PATH, "/"):
-            self._reply(200, {"ok": True, "service": "marketdesk"})
+            # The marker is here so "is it deployed?" is answerable from outside:
+            # the desk is silent by design, and a green /health on stale code is
+            # indistinguishable from a green /health on the fix. This is the one
+            # number that says which code is actually running.
+            self._reply(200, {"ok": True, "service": "marketdesk",
+                              "build": build_marker()})
             return
         self._reply(404, {"ok": False, "reason": "not found"})
 
