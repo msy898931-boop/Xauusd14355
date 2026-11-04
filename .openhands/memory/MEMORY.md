@@ -165,3 +165,31 @@ pyyaml). ⭐ **Render response header `x-render-routing` names the real state:**
 `suspend-by-user` = suspended by owner (503), `no-server` = no such service (404).
 The live service is named **`marketdesk`**, not the blueprint's `marketdesk-daemon`.
 Detail → `2026-11-02.md`.
+
+**2026-11-04 — "التلغرام ما عم يشتغل" was a SLEEPING HOST, not a token.** Three
+layers, each of which alone looked like "the bot is broken":
+1. ⭐ **A dead webhook starves the bot.** Telegram serves updates to a webhook OR
+   `getUpdates`, never both. A registration left pointing at a sleeping host made
+   every poll die with a bare **HTTP 409** while `pending_updates` climbed (9) and
+   `last_error` said `502 Bad Gateway`. `desk.cli telegram` now takes
+   `--clear-webhook` (→ `TelegramBot.delete_webhook()`), exposed in
+   `marketdesk-bot.yml` as `clear_webhook`. **A dead webhook is worse than none.**
+2. ⭐ **The real cause: Render's free tier sleeps after ~15 min of no INBOUND
+   traffic.** The only inbound traffic is a Telegram push, which a quiet chat never
+   sends — so a quiet hour = sleep, and the next press hits a cold instance (or
+   Telegram's delivery 502s and retries). The daemon now **pings its own public
+   `/health`** (`Daemon._self_ping`, `DESK_PING_EVERY`, default 600s) — before the
+   market-session check (a closed market is when nothing else is inbound) and
+   included in `_next_due_in()` so the loop cannot sleep past its own keep-alive.
+   Failure is recorded, never fatal; `DESK_PING_EVERY=0` disables it.
+3. ⭐ **Never build a keep-alive on GitHub cron.** `marketdesk-keepawake.yml`
+   (a `3-59/5` cron) fired **twice in ~15 hours** — a 5-minute cron cannot hold a
+   15-minute window.
+- ⭐ **"The token works" ≠ "the owner sees the message".** `check-alerts` said
+  `getMe: ok` and `test send: delivered` while the chat looked dead. `desk.cli
+  telegram` now prints the configured chat via `getChat` (here: `private`,
+  `Almalek121`) so a chat_id pointing at the wrong chat cannot hide.
+- ⭐ **Secrets never reach a local shell here** — `getMe` returned 404 locally
+  because the harness injects secrets only into the command that STARTS a process.
+  Test the alert path from the cloud workflow, never locally.
+Detail → `2026-11-02.md`.

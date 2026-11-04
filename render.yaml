@@ -55,6 +55,13 @@ services:
         value: "30"
       - key: DESK_READ_EVERY
         value: "900"
+      # The free tier sleeps after ~15 min with no INBOUND traffic, and the only
+      # inbound traffic is a Telegram push -- which a quiet chat never sends. So
+      # the daemon pings its OWN /health on this cadence, well inside the window,
+      # or the host sleeps and the next press meets a dead instance. 600s is the
+      # default; it is written here so the number is visible, not implied.
+      - key: DESK_PING_EVERY
+        value: "600"
       - key: DESK_ALERT_SCORE
         value: "0.25"
       - key: DESK_MIN_RR
