@@ -250,3 +250,9 @@ Detail → `2026-11-02.md`.
 - marketdesk **open risks (accepted, not fixed):** one data source (biquote, no
   fallback); Actions cache is best-effort so a duplicate alert is possible after
   eviction; the scoreboard mixes pre-fix (always-short) runs with post-fix ones.
+- ⭐ **Owner condition: keep the 10-year study OUT of my market analysis.**
+  Base reading/recommendation/scenarios ONLY on live desk output (9 agents, live
+  levels, scenarios, news). Never cite historical analogs, expectancy-R, n=47 or
+  any 10y stat; never run `desk gold`; never show `plan`'s hardcoded
+  `SIDE_EVIDENCE`. The desk's core (verdict + scenarios) was already study-free —
+  the study only surfaced via `gold`, `plan`'s frozen evidence, and `chart`.
