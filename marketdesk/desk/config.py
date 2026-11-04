@@ -87,6 +87,10 @@ class Settings:
     # window is deliberately short: an event 20 hours out is not a reason to
     # refuse a setup that resolves on the 15-minute chart.
     event_window_h: float = float(os.environ.get("DESK_EVENT_WINDOW_H", "6"))
+    # How long a published economic number keeps voting. A surprise is priced
+    # fast; an eight-hour-old print is history, not a signal. Bounded so the
+    # surprise agent cannot carry yesterday's release into today's bias.
+    surprise_window_h: float = float(os.environ.get("DESK_SURPRISE_WINDOW_H", "6"))
     # Alerting. Empty by default: an unconfigured desk stays silent, never
     # half-alerting. Values come from the environment and are never logged.
     telegram_token: str = field(

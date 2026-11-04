@@ -72,6 +72,7 @@ AGENT = {
     "levels": "المستويات",
     "volatility": "التذبذب",
     "news": "الأخبار",
+    "surprise": "المفاجآت",
     "correlation": "الارتباط",
     "risk": "المخاطر",
 }

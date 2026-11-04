@@ -341,7 +341,7 @@ takes ~1 minute to wake; the keepawake ping is what prevents that. Telegram's
 push would wake it anyway, but the first press after a sleep would wait a minute.
 
 
-## The roster (8 agents)
+## The roster (9 agents)
 
 | agent | craft | weight | what it decides |
 |---|---|---|---|
@@ -351,6 +351,7 @@ push would wake it anyway, but the first press after a sleep would wait a minute
 | **levels** | S/R + Fibonacci | 1.5 | nearest real levels, every one tagged by provenance |
 | **volatility** | ATR + range | 0.8 | stop distance and the volatility regime |
 | **news** | headlines + calendar | 1.5 | news tone and imminent event risk |
+| **surprise** | calendar actual vs forecast | 1.2 | what the printed number beat or missed, and by how much |
 | **correlation** | cross-market | 0.7 | is gold moving on its own or on the dollar? |
 | **risk** | the gate | — | may the desk trade at all? (fail-closed) |
 
@@ -413,7 +414,7 @@ desk/
   llm.py            Groq client (browser UA — Cloudflare needs it)
   indicators.py     EMA/RSI/ATR/MACD/pivots/fib — None when too short
   sources/biquote.py candles, quote, news, calendar, summary
-  agents/           base + the 8 specialists + the ROSTER
+  agents/           base + the 9 specialists + the ROSTER
   orchestrator.py   the central manager (gather → dispatch → synthesise)
   daemon.py         the always-on process: chat + levels + readings
   bot.py            the Telegram chat client (long poll, or webhook)

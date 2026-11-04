@@ -170,9 +170,10 @@ def test_orchestrator_runs_without_network(tmp_path, monkeypatch):
     monkeypatch.setattr("desk.sources.fetch_summary", lambda: {})
     run = desk.run()
     assert run.verdict in ("long", "short", "no-trade")
-    assert len(run.studies) == 8
-    # Every agent published to the shared board.
-    assert len(desk.shared.load_studies(run.run_id)) == 8
+    # Every agent in the roster must both run and publish to the shared board.
+    from desk.agents import ROSTER
+    assert len(run.studies) == len(ROSTER)
+    assert len(desk.shared.load_studies(run.run_id)) == len(ROSTER)
 
 
 def test_risk_gate_blocks_when_market_closed(tmp_path, monkeypatch):
@@ -3491,3 +3492,132 @@ def test_a_flag_beats_the_environment(tmp_path, monkeypatch):
                             poll_wait=None, ping_every=None, seconds=None, web=False)
     assert cmd_daemon(ns) == 0
     assert captured["level_every"] == 5.0
+
+
+# ---- surprise agent: the number the calendar printed --------------------
+
+def _cal_event(name, actual, forecast, currency="USD", hours_ago=1.0, previous=None):
+    """A calendar row shaped like the feed's, timed `hours_ago` before now."""
+    import datetime as _dt
+    when = _dt.datetime.now(_dt.UTC) - _dt.timedelta(hours=hours_ago)
+    return {"id": f"{name}-{when.isoformat()}", "time": when.isoformat(),
+            "countryCode": "US", "currency": currency, "name": name,
+            "importance": "high", "actual": actual, "forecast": forecast,
+            "previous": previous}
+
+
+def test_surprise_sign_is_the_fx_reaction(tmp_path):
+    """A USD print above forecast is gold-negative; below is gold-positive.
+    Getting this backwards would turn the whole agent into a contrarian."""
+    from desk.agents.surprise import gold_score
+
+    assert gold_score("ISM Services PMI", 0.5, "USD", "USD") < 0, "hot USD print -> gold down"
+    assert gold_score("ISM Services PMI", -0.5, "USD", "USD") > 0, "cool print -> gold up"
+    assert gold_score("ISM Services PMI", 1.0, "AUD", "USD") == 0.0, "non-USD -> no vote"
+
+
+def test_surprise_flips_sign_for_dollar_negative_series(tmp_path):
+    """A higher Unemployment Rate WEAKENS the dollar, so it is gold-positive.
+    A single uniform sign would get every labour-weakness release backwards."""
+    from desk.agents.surprise import gold_score
+
+    assert gold_score("Unemployment Rate", 0.5, "USD", "USD") > 0, "more unemployment -> gold up"
+    assert gold_score("Initial Jobless Claims", 0.5, "USD", "USD") > 0, "more claims -> gold up"
+    assert gold_score("Unemployment Rate", -0.5, "USD", "USD") < 0, "fewer -> gold down"
+
+
+def test_surprise_ignores_usd_tagged_non_dollar_events(tmp_path):
+    """A USD currency tag is not a dollar transmission channel. EIA crude stocks
+    is USD-tagged but an oil-supply figure -- the live feed scored it on gold
+    before this rule existed."""
+    from desk.agents.surprise import dollar_positive, gold_score
+
+    assert dollar_positive("EIA Crude Oil Stocks Change") is None
+    assert gold_score("EIA Crude Oil Stocks Change", 0.9, "USD", "USD") == 0.0
+
+
+def test_surprise_needs_a_forecast_to_exist(tmp_path):
+    """No expectation -> no surprise. Returning 0.0 would claim the number 'met
+    expectations' when there was no expectation to meet."""
+    from desk.agents.surprise import event_surprise
+
+    assert event_surprise(54.5, None) is None
+    assert event_surprise(None, 55.2) is None
+    assert event_surprise(54.5, 0) is None, "a zero forecast has no relative scale"
+    assert event_surprise(0.0, 5.0) is not None, "0.0 is a real reading, not 'missing'"
+
+
+def test_surprise_zero_when_forecast_is_met(tmp_path):
+    from desk.agents.surprise import event_surprise
+
+    assert event_surprise(55.2, 55.2) == 0.0
+
+
+def test_surprise_agent_reads_the_calendar_it_stored(tmp_path):
+    """End to end: rows in the shared calendar become a signed study."""
+    from desk.agents.surprise import SurpriseAgent
+    from desk.llm import LLM
+
+    s = _settings(tmp_path)
+    shared = SharedMemory(s.shared_db)
+    # ISM came in at 54.5 vs 55.2 expected -> a miss -> USD weaker -> gold up.
+    shared.save_calendar([_cal_event("ISM Services PMI", 54.5, 55.2)])
+
+    a = SurpriseAgent(s, shared, LLM("", s.models))
+    st = a.study("run-1")
+    assert st.stance == "bull", f"a USD miss must read bullish for gold, got {st.stance}"
+    assert st.score > 0
+    assert st.payload["fresh"] == 1
+    assert st.payload["events"][0]["actual"] == 54.5
+
+
+def test_surprise_agent_ignores_stale_and_foreign_prints(tmp_path):
+    """An old print and another currency's print must not vote."""
+    from desk.agents.surprise import SurpriseAgent
+    from desk.llm import LLM
+
+    s = _settings(tmp_path)
+    shared = SharedMemory(s.shared_db)
+    shared.save_calendar([
+        _cal_event("ISM Services PMI", 54.5, 55.2, hours_ago=20),      # stale
+        _cal_event("RBA Rate Decision", 4.35, 4.10, currency="AUD"),   # not USD
+    ])
+
+    a = SurpriseAgent(s, shared, LLM("", s.models))
+    st = a.study("run-2")
+    assert st.score == 0.0, "nothing fresh and in-currency -> no vote"
+    assert st.payload["fresh"] == 0
+
+
+def test_surprise_agent_stays_silent_without_data(tmp_path):
+    """No calendar at all is not a bullish or bearish signal."""
+    from desk.agents.surprise import SurpriseAgent
+    from desk.llm import LLM
+
+    s = _settings(tmp_path)
+    a = SurpriseAgent(s, SharedMemory(s.shared_db), LLM("", s.models))
+    st = a.study("run-3")
+    assert st.score == 0.0
+    assert st.confidence == 0.0
+    assert st.payload["events"] == []
+
+
+def test_surprise_weights_by_relative_size(tmp_path):
+    """A bigger relative miss must score bigger, so a 5% miss outweighs a 0.5%
+    one instead of both counting as 'a miss'."""
+    from desk.agents.surprise import event_surprise
+
+    big = event_surprise(105.0, 100.0)
+    small = event_surprise(100.5, 100.0)
+    assert big is not None and small is not None
+    assert abs(big) > abs(small)
+
+
+def test_surprise_is_in_the_roster(tmp_path):
+    """A new agent that is not registered does not run -- the wiring is the
+    feature."""
+    from desk.agents import ROSTER
+    from desk.agents.surprise import SurpriseAgent
+
+    assert SurpriseAgent in ROSTER
+
