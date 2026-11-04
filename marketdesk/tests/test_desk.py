@@ -3027,6 +3027,85 @@ def test_daemon_keeps_going_when_a_level_check_fails(tmp_path, monkeypatch):
     assert d.errors                   # and the failure was recorded
 
 
+def test_the_self_ping_fires_on_its_own_cadence(tmp_path, monkeypatch):
+    """The host sleeps when nothing INBOUND arrives for ~15 minutes, and the only
+    other inbound traffic is a Telegram push -- which a quiet chat never sends.
+    So the daemon must ping itself, on its own clock, or a free host sleeps and
+    the next press meets a dead instance."""
+    d, _ = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900,
+                   ping_every=600)
+    hits: list[str] = []
+    monkeypatch.setattr(d, "_self_ping", lambda: hits.append("ping") or {"ok": True})
+    d.tick(0.0)
+    assert hits == ["ping"]                    # the very first tick pings
+    d.tick(300.0)
+    assert hits == ["ping"]                    # not yet due
+    d.tick(600.0)
+    assert hits == ["ping", "ping"]            # due again
+
+
+def test_the_self_ping_runs_even_when_the_market_is_closed(tmp_path, monkeypatch):
+    """A closed market is when the host sleeps most: no reading, no push, nothing
+    inbound. If the ping were a market job it would stop exactly when it matters
+    most."""
+    d, _ = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900,
+                   ping_every=600)
+    monkeypatch.setattr("desk.daemon.market_session", lambda now=None: _ClosedSession())
+    hits: list[str] = []
+    monkeypatch.setattr(d, "_self_ping", lambda: hits.append("ping") or {"ok": True})
+    out = d.tick(0.0)
+    assert out["closed"] is True
+    assert hits == ["ping"]                    # pinged despite the closed market
+
+
+def test_the_self_ping_can_be_switched_off(tmp_path, monkeypatch):
+    """A host that does not sleep should not make a needless request: ping_every=0
+    disables it rather than pinging once and stopping."""
+    d, _ = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900,
+                   ping_every=0)
+    hits: list[str] = []
+    monkeypatch.setattr(d, "_self_ping", lambda: hits.append("ping") or {"ok": True})
+    d.tick(0.0)
+    d.tick(100000.0)
+    assert hits == []
+
+
+def test_the_self_ping_reports_failure_without_killing_the_desk(tmp_path, monkeypatch):
+    """A ping that cannot reach us means we are asleep or the base is wrong.
+    Neither is made worse by a hard failure, and the market jobs must keep going."""
+    d, seen = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900,
+                      ping_every=600)
+    monkeypatch.setattr("desk.daemon.market_session", lambda now=None: _OpenSession())
+    d.settings.webhook_base = "http://127.0.0.1:9"   # nothing listens on port 9
+    out = d.tick(0.0)
+    assert out["ping"]["ok"] is False
+    assert seen["read"] == [1]                 # the reading still ran
+    assert any(e["job"] == "ping" for e in d.errors)
+
+
+def test_the_self_ping_skips_when_there_is_no_public_base(tmp_path, monkeypatch):
+    """A local process has no public address to ping; that is not an error."""
+    d, _ = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900,
+                   ping_every=600)
+    monkeypatch.delenv("RENDER_EXTERNAL_URL", raising=False)
+    d.settings.webhook_base = ""
+    out = d.tick(0.0)
+    assert out["ping"] == {"skipped": "no public base"}
+    assert d.errors == []
+
+
+def test_the_daemon_sleeps_no_longer_than_the_ping_window(tmp_path, monkeypatch):
+    """The loop sleeps to the next job; if the ping were excluded from that
+    calculation the host would sleep past its own keep-alive. The ping interval
+    must bound the sleep whenever it is the soonest job."""
+    d, _ = _daemon(tmp_path, monkeypatch, level_every=1000, read_every=2000,
+                   ping_every=600)
+    d.last_level = 0.0
+    d.last_read = 0.0
+    d.last_ping = 0.0
+    assert d._next_due_in(0.0) == 600.0        # the ping, not the 1000s level
+
+
 def test_daemon_keeps_going_when_a_reading_fails(tmp_path, monkeypatch):
     """A failed reading must not kill the process either."""
     d, seen = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900)
@@ -3379,7 +3458,7 @@ def test_daemon_cadences_can_come_from_the_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("DESK_LEVEL_EVERY", "30")
     monkeypatch.setenv("DESK_READ_EVERY", "600")
     ns = argparse.Namespace(symbol=None, level_every=None, read_every=None,
-                            poll_wait=None, seconds=None, web=False)
+                            poll_wait=None, ping_every=None, seconds=None, web=False)
     assert cmd_daemon(ns) == 0
     assert captured["level_every"] == 30.0
     assert captured["read_every"] == 600.0
@@ -3409,6 +3488,6 @@ def test_a_flag_beats_the_environment(tmp_path, monkeypatch):
     monkeypatch.setattr("desk.daemon.Daemon", Cap)
     monkeypatch.setenv("DESK_LEVEL_EVERY", "30")
     ns = argparse.Namespace(symbol=None, level_every=5.0, read_every=None,
-                            poll_wait=None, seconds=None, web=False)
+                            poll_wait=None, ping_every=None, seconds=None, web=False)
     assert cmd_daemon(ns) == 0
     assert captured["level_every"] == 5.0

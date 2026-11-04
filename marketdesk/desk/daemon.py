@@ -69,6 +69,16 @@ DEFAULT_POLL_WAIT = 50.0
 MIN_LOOP_S = 1.0
 # While the market is closed, re-check the session this often.
 CLOSED_RECHECK_S = 60.0
+# How often to ping our OWN public /health. A free host spins down after ~15
+# minutes with no INBOUND traffic, and the inbound traffic that keeps it awake
+# is Telegram's push -- which only arrives when someone presses a button. In a
+# quiet hour there is no push, so the host sleeps, and the next press (or the
+# webhook delivery Telegram retries) hits a cold or dead instance. Pinging
+# ourselves every 10 minutes is inbound traffic on a timer we control, so the
+# window can never elapse. It does NOT depend on the GitHub cron, which is
+# best-effort and on this repo has fired twice a day against a 5-minute
+# schedule -- far too rare to hold a 15-minute window open.
+DEFAULT_PING_EVERY = 600.0
 # A bounded tail of what was alerted and what failed, so a months-long process
 # does not grow a list without end.
 KEEP = 50
@@ -80,11 +90,15 @@ class Daemon:
     def __init__(self, settings: Settings, *, level_every: float = DEFAULT_LEVEL_EVERY,
                  read_every: float = DEFAULT_READ_EVERY,
                  poll_wait_s: float = DEFAULT_POLL_WAIT,
+                 ping_every: float = DEFAULT_PING_EVERY,
                  bot=None, orchestrator=None, web: bool = False):
         self.settings = settings
         self.level_every = max(MIN_LOOP_S, float(level_every))
         self.read_every = max(self.level_every, float(read_every))
         self.poll_wait_s = max(MIN_LOOP_S, float(poll_wait_s))
+        # 0 disables the self-ping: a host that does not sleep does not need it,
+        # and a caller should be able to say so rather than get a surprise call.
+        self.ping_every = max(0.0, float(ping_every))
         # Webhook mode replaces the poll: the chat is pushed to, not read. The
         # daemon still runs the market jobs on their cadences either way.
         self.web = bool(web)
@@ -98,6 +112,7 @@ class Daemon:
         # idle for a full interval before doing anything.
         self.last_level = float("-inf")
         self.last_read = float("-inf")
+        self.last_ping = float("-inf")
         self._stop = False
         self._was_open: bool | None = None
         # Explicit typed counters, not a `dict[str, object]`: the dict form makes
@@ -105,6 +120,7 @@ class Daemon:
         self.ticks = 0
         self.level_checks = 0
         self.reads = 0
+        self.pings = 0
         self.alerts: list[str] = []
         self.errors: list[dict] = []
 
@@ -139,11 +155,45 @@ class Daemon:
             jobs.append("levels")
         if now - self.last_read >= self.read_every:
             jobs.append("read")
+        if self.ping_every and now - self.last_ping >= self.ping_every:
+            jobs.append("ping")
         return jobs
 
     def _next_due_in(self, now: float) -> float:
-        return max(0.0, min(self.level_every - (now - self.last_level),
-                            self.read_every - (now - self.last_read)))
+        due = [self.level_every - (now - self.last_level),
+               self.read_every - (now - self.last_read)]
+        if self.ping_every:
+            due.append(self.ping_every - (now - self.last_ping))
+        return max(0.0, min(due))
+
+    def _self_ping(self) -> dict:
+        """Fetch our own public `/health`, so the host sees inbound traffic.
+
+        This is the honest answer to the free-tier sleep window: the only other
+        inbound traffic is a Telegram push, and a quiet chat produces none, so
+        the host sleeps and the next press meets a cold start (or, mid-sleep,
+        Telegram's delivery fails outright and the update is retried later).
+
+        It is best-effort by design: a failure is recorded and the loop moves on.
+        If the ping itself cannot reach us, we are already asleep or the base is
+        wrong -- nothing here can make that worse, and a hard failure would take
+        down the market jobs that do work.
+        """
+        base = (self.settings.webhook_base
+                or os.environ.get("RENDER_EXTERNAL_URL", "")).rstrip("/")
+        if not base:
+            # No public address known: a local process has nothing to ping.
+            return {"skipped": "no public base"}
+        from .webhook import HEALTH_PATH
+        url = f"{base}{HEALTH_PATH}"
+        try:
+            import urllib.request
+            with urllib.request.urlopen(url, timeout=20) as r:
+                ok = 200 <= r.status < 300
+            return {"ok": ok, "url": url}
+        except Exception as exc:  # noqa: BLE001 - a failed ping must not stop the desk
+            self._note_error("ping", exc)
+            return {"ok": False, "error": exc.__class__.__name__}
 
     # ---- jobs ------------------------------------------------------------
     def _level_check(self) -> dict:
@@ -185,6 +235,13 @@ class Daemon:
         """
         now = time.monotonic() if now is None else now
         out: dict = {"levels": None, "read": None, "closed": False}
+        # The self-ping is NOT a market job: it must run even when the market is
+        # closed, which is exactly when no push arrives and the host is most
+        # likely to sleep. Running it before the session check is the point.
+        if self.ping_every and now - self.last_ping >= self.ping_every:
+            self.last_ping = now
+            out["ping"] = self._self_ping()
+            self.pings += 1
         if self.settings.respect_session:
             sess = market_session()
             if not sess.is_open:
@@ -332,6 +389,7 @@ class Daemon:
         return {"ticks": self.ticks,
                 "level_checks": self.level_checks,
                 "reads": self.reads,
+                "pings": self.pings,
                 "alerts": self.alerts[-20:],
                 "errors": self.errors[-10:],
                 "level_every_s": self.level_every,

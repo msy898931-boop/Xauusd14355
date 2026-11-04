@@ -336,6 +336,7 @@ def cmd_daemon(args) -> int:
                level_every=pick(args.level_every, "DESK_LEVEL_EVERY", 10.0),
                read_every=pick(args.read_every, "DESK_READ_EVERY", 900.0),
                poll_wait_s=pick(args.poll_wait, "DESK_POLL_WAIT", 50.0),
+               ping_every=pick(args.ping_every, "DESK_PING_EVERY", 600.0),
                web=args.web)
     d.install_signals()
     out = d.run_forever(seconds=args.seconds)
@@ -599,6 +600,9 @@ def main(argv=None) -> int:
                     help="seconds between full readings (default 900)")
     dm.add_argument("--poll-wait", type=float, default=None,
                     help="seconds one long poll waits on Telegram (default 50)")
+    dm.add_argument("--ping-every", type=float, default=None,
+                    help="seconds between self-pings of our own /health, so a "
+                         "free host does not sleep (default 600, 0 disables)")
     dm.add_argument("--seconds", type=float, default=None,
                     help="run for this long instead of forever (smoke test)")
     dm.add_argument("--web", action="store_true",
