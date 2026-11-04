@@ -761,6 +761,76 @@ def test_live_price_prefers_quote_then_closed_bar(tmp_path):
     assert a.live_price() == 108.0, "a stale quote must not be the price"
 
 
+def _coarse_bars(n, close_fn, *, minutes=1440):
+    """`n` closed bars spaced `minutes` apart, so a frame's last bar is genuinely
+    the newest and a live price differs from its close."""
+    out = []
+    for i in range(n):
+        total = i * minutes
+        day, hour, minute = 1 + total // 1440, (total % 1440) // 60, total % 60
+        out.append({"openTime": f"2026-01-{day:02d}T{hour:02d}:{minute:02d}:00Z",
+                    "open": close_fn(i) - 1, "high": close_fn(i) + 2,
+                    "low": close_fn(i) - 2, "close": close_fn(i),
+                    "tickVolume": 1, "isOpen": False})
+    return out
+
+
+def test_trend_compares_the_live_price_not_a_stale_daily_close(tmp_path):
+    """The regression that made the desk bearish for 56 straight runs: the daily
+    vote compared the previous day's close against a fresh EMA stack, so a price
+    a day old manufactured a bearish vote while the market rose.
+
+    The daily series rises, then its last closed bar drops below the stack. With
+    the stale close that is a non-bullish vote; only the live price above the
+    stack is bullish. The two prices must disagree, or the test proves nothing.
+    """
+    from desk.agents.trend import TrendAgent
+    from desk.llm import LLM
+    from desk.memory import SharedMemory
+
+    s = _settings(tmp_path)
+    shared = SharedMemory(s.shared_db)
+    daily = _coarse_bars(60, lambda i: (2900.0 + 2 * i) if i < 59 else 2900.0)
+    for tf, minutes in (("1d", 1440), ("4h", 240), ("1h", 60)):
+        shared.save_candles(s.symbol, tf, _coarse_bars(60, lambda i: 3000.0 + i, minutes=minutes))
+    shared.save_candles(s.symbol, "1d", daily)
+    shared.save_quote(s.symbol, {"mid": 3100.0, "stale": False})
+    a = TrendAgent(s, shared, LLM("", s.models))
+    st = a.study("t")
+    d1 = st.payload["frames"]["1d"]
+    assert d1["px"] == 3100.0, "the daily must compare the live price"
+    assert d1["vote"] == 1, "the live price above a rising stack is bullish"
+    assert daily[-1]["close"] < d1["ema20"], "sanity: the stale close is below the stack"
+    assert st.score > 0, "a market above its EMAs must not read bearish"
+
+
+def test_structure_places_the_live_price_in_the_range(tmp_path):
+    """Same class: the premium/discount zone and the break-of-structure test must
+    use the live price, or the desk reads a price from yesterday as today's. The
+    daily oscillates in a range; the live price breaks above it."""
+    import math
+
+    from desk.agents.structure import StructureAgent
+    from desk.llm import LLM
+    from desk.memory import SharedMemory
+
+    s = _settings(tmp_path)
+    shared = SharedMemory(s.shared_db)
+    for tf, minutes in (("1d", 1440), ("4h", 240), ("1h", 60), ("15m", 15)):
+        shared.save_candles(s.symbol, tf,
+                            _coarse_bars(60, lambda i: 3000.0 + 20 * math.sin(i), minutes=minutes))
+    # The last closed 1d close is inside the range; a live quote above the range
+    # high must land the price at the top and register the break, not sit at the
+    # stale close.
+    shared.save_quote(s.symbol, {"mid": 3100.0, "stale": False})
+    a = StructureAgent(s, shared, LLM("", s.models))
+    st = a.study("t")
+    d1 = st.payload["frames"]["1d"]
+    assert d1["position"] > 0.9, f"live price at the range top, got {d1['position']}"
+    assert d1["bos"] == "bullish BOS", "the live price is above the prior swing high"
+    assert d1["zone"] == "premium"
+
+
 def test_stance_of_uses_the_shared_band(tmp_path):
     from desk.agents.base import Agent
     from desk.llm import LLM

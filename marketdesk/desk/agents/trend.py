@@ -22,6 +22,12 @@ class TrendAgent(Agent):
 
     def study(self, run_id: str) -> Study:
         data = self.frames_data()
+        # The EMA stack is a fact about CLOSED bars; the price compared against
+        # it is the LIVE one. Reading the last close on the daily put a price up
+        # to a day old against a fresh stack -- on live data that turned a flat
+        # daily into a full-weight (8) bearish vote, and the desk was never once
+        # bullish in 56 runs while gold rose 3%.
+        live = self.live_price()
         per, tally, wtot = {}, 0.0, 0.0
         for tf in ("1d", "4h", "1h", "30m", "15m", "5m", "1m"):
             bars = data.get(tf) or []
@@ -33,7 +39,7 @@ class TrendAgent(Agent):
             closes = [b["c"] for b in bars]
             e20, e50 = ind.ema(closes, 20)[-1], ind.ema(closes, 50)[-1]
             e20_slope = ind.slope(ind.ema(closes, 20), 6)
-            px = closes[-1]
+            px = live if live is not None else closes[-1]
             vote = 0
             if e20 and e50:
                 if px > e20 > e50:

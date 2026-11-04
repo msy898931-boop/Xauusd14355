@@ -222,3 +222,8 @@ Detail → `2026-11-02.md`.
   so `load_candles` collapses it to 24 hourly bars — editing the "last" raw bar
   then does NOT change the last 1h bar. Space timestamps hourly when a test must
   control the newest closed bar.
+- ⭐ **A deploy you cannot identify is a deploy you cannot trust.** The live
+  marketdesk service exposed no revision: `/health` was `{ok:true}` only, so a
+  green check could not distinguish new code from a stale build. It now reports
+  `RENDER_GIT_COMMIT[:12]` (Render's default env var) or `v<version>` off-Render.
+  One env var, one field — worth adding to any always-on service.

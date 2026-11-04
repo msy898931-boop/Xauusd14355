@@ -30,6 +30,11 @@ class VolatilityAgent(Agent):
 
     def study(self, run_id: str) -> Study:
         data = self.frames_data()
+        # The ATR is a fact about closed bars; the price it is expressed as a
+        # percentage OF is the live one. On the daily the last close can be a day
+        # old, which inflates the ratio and can trip the high-volatility warning
+        # on a quiet market.
+        live = self.live_price()
         per: dict[str, dict] = {}
         for tf, bars in data.items():
             if len(bars) < 20:
@@ -39,7 +44,8 @@ class VolatilityAgent(Agent):
             closes = [b["c"] for b in bars]
             recent = bars[-20:]
             avg_range = sum(b["h"] - b["l"] for b in recent) / len(recent)
-            a_pct = (a / closes[-1] * 100) if a and closes[-1] else None
+            denom = live if live is not None else closes[-1]
+            a_pct = (a / denom * 100) if a and denom else None
             vr = ind.volume_ratio(bars)
             per[tf] = {"atr": round(a, 2) if a else None,
                        "atr_pct": round(a_pct, 2) if a_pct else None,

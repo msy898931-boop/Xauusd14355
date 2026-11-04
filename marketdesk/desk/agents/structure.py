@@ -21,6 +21,12 @@ class StructureAgent(Agent):
 
     def study(self, run_id: str) -> Study:
         data = self.frames_data()
+        # Where the price sits in the range -- and whether it broke structure --
+        # must use the LIVE price, not the last closed bar's close. On the daily
+        # that close is up to a day old: comparing it to a range put a price 127
+        # points below the market on live data, inventing a bearish bias the
+        # desk then held for 56 runs.
+        live = self.live_price()
         per: dict[str, dict] = {}
         votes = []
         for tf, bars in data.items():
@@ -30,11 +36,11 @@ class StructureAgent(Agent):
             st = ind.structure(bars, wing=5)
             lo, hi = ind.pivots(bars, 3)
             closes = [b["c"] for b in bars]
-            px = closes[-1]
+            px = live if live is not None else closes[-1]
             rng_hi, rng_lo = max(b["h"] for b in bars), min(b["l"] for b in bars)
             pos = (px - rng_lo) / (rng_hi - rng_lo) if rng_hi > rng_lo else 0.5
             zone = "premium" if pos > 0.6 else ("discount" if pos < 0.4 else "equilibrium")
-            # A break of structure: the last close beyond the prior swing extreme.
+            # A break of structure: the live price beyond the prior swing extreme.
             bos = "none"
             if len(hi) >= 2 and px > hi[-2]:
                 bos = "bullish BOS"
