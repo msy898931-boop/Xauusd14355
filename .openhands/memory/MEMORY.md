@@ -237,3 +237,16 @@ Detail → `2026-11-02.md`.
   not about now:** indicators read closed bars, but the price *compared against
   them* must be `live_price()`. Grep `closes[-1]` in any agent. Fixed + 2 tests
   proven to fail on the old code. Verdict went sell → no-trade.
+- ⭐ **A live call needs live data.** `gather()` survives a source outage by
+  reusing the DB — right for reading, wrong for alerting: a directional verdict
+  from a feed dead for hours is a stale number dressed as a signal. marketdesk
+  now gates only the ALERT on data age (`data_fresh()`, `DESK_MAX_DATA_AGE_S`
+  default 3h, measured from `fetched_at` so a quiet market is not "stale").
+  Reproduced by ageing readings + simulating an outage (verdict still came out).
+- ⭐ **Do not judge production by the sandbox's injected secret.** marketdesk's
+  Telegram token in the sandbox is malformed (35 chars, `getMe` 404), but the
+  GitHub secret is valid (len 46) and the bot is live (`chat: Almalek121`,
+  webhook). `check-alerts` locally lies; run `desk.cli telegram` from CI instead.
+- marketdesk **open risks (accepted, not fixed):** one data source (biquote, no
+  fallback); Actions cache is best-effort so a duplicate alert is possible after
+  eviction; the scoreboard mixes pre-fix (always-short) runs with post-fix ones.
