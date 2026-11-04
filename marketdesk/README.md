@@ -157,7 +157,7 @@ it. If no real level clears the bar, the desk states no plan rather than a losin
 one — and a projection is used only when there is no structure on that side at
 all, tagged as the weakest kind.
 
-## Seven rules the desk holds itself to
+## Eight rules the desk holds itself to
 
 These are not style preferences; each one was a real defect found by measurement.
 
@@ -195,6 +195,13 @@ These are not style preferences; each one was a real defect found by measurement
    volume is used to widen the stop and never to pick a side — and only ever to
    widen, because a quiet bar is the absence of the signal, not a reason to put
    the stop inside noise.
+8. **A live call needs live data.** A directional verdict computed from a feed
+   that stopped hours ago is a stale number wearing a signal's clothes: the desk
+   would wake someone to trade a price the market already left. `gather()` keeps
+   the run alive on whatever it already held — right for reading, wrong for
+   alerting — so the alert gate checks the age of the newest reading
+   (`DESK_MAX_DATA_AGE_S`, default 3h) and stays silent if it is old. A merely
+   quiet market is not stale: age is measured from the fetch time, not the bar.
 
 ## When the model is unavailable
 

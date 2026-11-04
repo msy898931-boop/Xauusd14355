@@ -395,10 +395,44 @@ class Orchestrator:
             return False, "no directional call"
         if not run.recommendation.get("allowed", True):
             return False, "بوابة المخاطر أوقفتها"
+        fresh, why = self.data_fresh()
+        if not fresh:
+            return False, why
         if abs(run.score) < self.settings.alert_score:
             return False, f"conviction {run.score:+.2f} below {self.settings.alert_score}"
         fp = f"{run.symbol}:{run.verdict}:{round(run.score, 1)}"
         return True, fp
+
+    def data_fresh(self) -> tuple[bool, str]:
+        """Is the newest reading recent enough to act on?
+
+        A directional call computed from a feed that stopped hours ago is a stale
+        number wearing a signal's clothes -- the desk would alert on a price the
+        market left behind. The feed's own staleness flag catches a slow quote;
+        this catches the case where the whole source is down and the run silently
+        proceeds on whatever the database already held. Age is measured from
+        `fetched_at`, so a market that is merely quiet is not mistaken for a dead
+        feed (the fetch still stamps the time).
+        """
+        if self.settings.max_data_age_s <= 0:
+            return True, ""
+        now = time.time()
+        ages: list[tuple[str, float]] = []
+        q = self.shared.load_quote(self.settings.symbol)
+        if q and q.get("fetched_at"):
+            ages.append(("quote", now - q["fetched_at"]))
+        for tf in ("1h", "15m"):
+            rows = self.shared.load_candles(self.settings.symbol, tf)
+            if rows and rows[-1].get("fetched_at"):
+                ages.append((tf, now - rows[-1]["fetched_at"]))
+        if not ages:
+            # No timestamp to judge: freshness is unprovable, so the gate does not
+            # fire. A run with no data at all is already `no-trade` by construction.
+            return True, ""
+        label, age = min(ages, key=lambda x: x[1])
+        if age > self.settings.max_data_age_s:
+            return False, f"بيانات قديمة ({label}: {age / 3600:.1f} ساعة)"
+        return True, ""
 
     def watch_once(self, notifier=None) -> dict:
         """One scheduled pass: run the desk, grade what is now gradeable, and

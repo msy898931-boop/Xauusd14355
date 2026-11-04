@@ -384,6 +384,9 @@ def cmd_check_alerts(args) -> int:
         ok = n.send("MarketDesk — اختبار التنبيه: الأنبوب يعمل.")
         print(f"test send: {'delivered' if ok else 'FAILED — the bot cannot reach this chat'}")
         return 0 if ok else 1
+    fresh, why = Orchestrator(s).data_fresh()
+    print(f"data fresh:  {'yes' if fresh else 'NO — ' + why}"
+          f"  (limit {s.max_data_age_s / 3600:.1f}h, DESK_MAX_DATA_AGE_S)")
     print("result: ready (add --send to deliver a test message)")
     return 0
 

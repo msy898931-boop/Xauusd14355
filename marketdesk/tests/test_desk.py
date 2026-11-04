@@ -404,6 +404,40 @@ def test_actionable_only_for_live_confident_calls(tmp_path, monkeypatch):
     assert ok is True and fp.startswith("XAUUSD:short")
 
 
+def test_actionable_refuses_to_alert_on_stale_data(tmp_path):
+    """A directional call computed from a feed that stopped hours ago is a stale
+    number wearing a signal's clothes. The feed's own stale flag catches a slow
+    quote; this catches the case where the whole source is down and the run
+    silently proceeds on whatever the database already held. Only the ALERT is
+    gated -- the run and the scoreboard still work on old data."""
+    import sqlite3
+    import time
+
+    from desk.memory import SharedMemory
+    from desk.orchestrator import Run
+
+    s = _settings(tmp_path)
+    shared = SharedMemory(s.shared_db)
+    for tf in s.timeframes:
+        shared.save_candles(s.symbol, tf, _wave(60, period=20, amp=20, base=3000))
+    shared.save_quote(s.symbol, {"mid": 3000.0, "stale": False})
+    desk = Orchestrator(s)
+    desk.settings.alert_score = 0.25
+    r = Run("x", "XAUUSD", 0.0, [], "short", -0.60, {"allowed": True})
+    assert desk.actionable(r)[0] is True, "a fresh, confident call must alert"
+
+    # Age the stored reading past the limit: the source is effectively down.
+    desk.settings.max_data_age_s = 3600
+    with sqlite3.connect(s.shared_db) as c:
+        c.execute("UPDATE quotes SET fetched_at = ? WHERE symbol = ?",
+                  (time.time() - 5 * 3600, s.symbol))
+        c.execute("UPDATE candles SET fetched_at = ? WHERE symbol = ?",
+                  (time.time() - 5 * 3600, s.symbol))
+    ok, reason = desk.actionable(r)
+    assert ok is False, "stale data must not produce an alert"
+    assert "قديمة" in reason or "stale" in reason.lower()
+
+
 def test_levels_from_scenarios_watch_the_triggers_the_desk_printed(tmp_path):
     """The scenario triggers must become watchable levels, on the correct side.
 

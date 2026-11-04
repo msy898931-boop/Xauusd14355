@@ -227,3 +227,13 @@ Detail → `2026-11-02.md`.
   green check could not distinguish new code from a stale build. It now reports
   `RENDER_GIT_COMMIT[:12]` (Render's default env var) or `v<version>` off-Render.
   One env var, one field — worth adding to any always-on service.
+- ⭐⭐ **When every outcome has the same sign, it is a bug, not a view.**
+  marketdesk was short 19/19, bias down 24/24, `trend` bear 56/56 (bull never),
+  and 0/13 plans reached target (-13R) — while gold ROSE 3%. Cause: `trend` and
+  `structure` took the price as `closes[-1]` (last CLOSED bar); on the daily that
+  is up to a day old (**3938 vs live 4065**, 127 pts off), compared against a
+  fresh EMA stack → a full-weight (8) bearish daily vote every run. It was one
+  bet placed 13 times, not 13 losses. ⭐ **A close is a fact about a closed bar,
+  not about now:** indicators read closed bars, but the price *compared against
+  them* must be `live_price()`. Grep `closes[-1]` in any agent. Fixed + 2 tests
+  proven to fail on the old code. Verdict went sell → no-trade.

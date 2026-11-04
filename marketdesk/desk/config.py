@@ -99,6 +99,14 @@ class Settings:
         default_factory=lambda: os.environ.get("TELEGRAM_CHAT_ID", ""))
     # A signal is worth waking someone for only above this conviction.
     alert_score: float = float(os.environ.get("DESK_ALERT_SCORE", "0.25"))
+    # How old the newest reading may be before the desk refuses to alert. A live
+    # call is a statement about the market NOW; a directional call computed from
+    # a feed that stopped hours ago is a stale number dressed as a signal. Only
+    # an alert is gated -- the run, the card and the scoreboard still work on old
+    # data, so the desk can still be read. Default 3h: wide enough that a normal
+    # hourly bar and a best-effort schedule never trip it, narrow enough to catch
+    # an outage before the desk acts on it.
+    max_data_age_s: float = float(os.environ.get("DESK_MAX_DATA_AGE_S", str(3 * 3600)))
     # A setup is only worth stating if reward exceeds risk by this factor. A plan
     # whose nearest target sits closer than the stop is a losing proposition even
     # when the direction is right.
