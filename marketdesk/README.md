@@ -161,11 +161,15 @@ all, tagged as the weakest kind.
 
 These are not style preferences; each one was a real defect found by measurement.
 
-1. **Indicators read closed bars only.** The newest bar on every timeframe is
-   still forming, so its high/low/close move with the tick and an indicator read
-   off it is not a fact. On live data the difference was 7 RSI points on the
-   daily (38.0 with the partial bar, 30.8 without) — enough to flip a reading.
-   The live price comes from the broker quote, never from a partial bar.
+1. **Indicators read closed bars; the price is live.** The newest bar on every
+   timeframe is still forming, so its high/low/close move with the tick and an
+   indicator read off it is not a fact. On live data the difference was 7 RSI
+   points on the daily (38.0 with the partial bar, 30.8 without) — enough to flip
+   a reading. The live price comes from the broker quote, never from a partial
+   bar. And the price an agent *compares* against a level is the live one too: a
+   close is a fact about a closed bar, not about now. Reading the daily close as
+   "the price" put a value up to a day old against a fresh EMA stack — 127 points
+   off on live data — and held the desk bearish for 56 straight runs.
 2. **One definition of "neutral".** `NEUTRAL_BAND` (default 0.15) is the single
    constant an agent uses to name its stance and the orchestrator uses to name a
    verdict. A hardcoded band in each of them is how a specialist and the final
