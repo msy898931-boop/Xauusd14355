@@ -62,6 +62,23 @@ def atr(bars: list[dict], n: int = 14) -> float | None:
     return a
 
 
+def volume_ratio(bars: list[dict], n: int = 20) -> float | None:
+    """Latest closed bar's activity as a multiple of the last `n` bars' average.
+
+    The feed's activity field is `tick_volume` (the broker's `volume` is always
+    0), so this is a participation proxy, not a share count. Returns None when
+    there are fewer than `n + 1` bars or the window is empty -- so a short series
+    reads as "no reading" rather than as a ratio computed off three bars.
+    """
+    if len(bars) < n + 1:
+        return None
+    window = bars[-(n + 1):-1]
+    avg = sum(b.get("tv") or 0 for b in window) / n
+    if avg <= 0:
+        return None
+    return (bars[-1].get("tv") or 0) / avg
+
+
 def macd(closes: list[float]) -> tuple[float | None, float | None, float | None]:
     """Returns (line, signal, histogram). None where the sample is too short."""
     e12, e26 = ema(closes, 12), ema(closes, 26)

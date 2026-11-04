@@ -71,6 +71,10 @@ def render(run: Run, lang: str = "ar") -> str:
                  f"المخاطرة/المكافأة {_n(r.get('rr'), 2)}")
         tg = " · ".join(f"{_n(t['level'])} ({ar.kind(t['kind'])})" for t in r.get("targets", []))
         L.append(f"  الأهداف: {tg}")
+    if r.get("vol_ratio") is not None:
+        mult = r.get("vol_mult")
+        note = "" if mult in (None, 1.0) else f" → وسّعنا الوقف {mult:.2f}×"
+        L.append(f"  نشاط آخر شمعة ساعة: {r['vol_ratio']:.2f}× المتوسط{note}")
     if r.get("levels_note"):
         L.append(f"  ملاحظة: {r['levels_note']}")
     if r.get("warnings"):

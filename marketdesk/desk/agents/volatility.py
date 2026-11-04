@@ -40,9 +40,11 @@ class VolatilityAgent(Agent):
             recent = bars[-20:]
             avg_range = sum(b["h"] - b["l"] for b in recent) / len(recent)
             a_pct = (a / closes[-1] * 100) if a and closes[-1] else None
+            vr = ind.volume_ratio(bars)
             per[tf] = {"atr": round(a, 2) if a else None,
                        "atr_pct": round(a_pct, 2) if a_pct else None,
-                       "avg_range_20": round(avg_range, 2)}
+                       "avg_range_20": round(avg_range, 2),
+                       "vol_ratio": round(vr, 2) if vr is not None else None}
         q = self.quote() or {}
         day_pct = q.get("day_diff_pct")
         # Regime from the daily ATR as a share of price: a crude but honest band.

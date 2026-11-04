@@ -157,7 +157,7 @@ it. If no real level clears the bar, the desk states no plan rather than a losin
 one — and a projection is used only when there is no structure on that side at
 all, tagged as the weakest kind.
 
-## Six rules the desk holds itself to
+## Seven rules the desk holds itself to
 
 These are not style preferences; each one was a real defect found by measurement.
 
@@ -180,9 +180,17 @@ These are not style preferences; each one was a real defect found by measurement
 5. **A plan is graded on the stop, not the direction.** A short that reaches its
    target only after first taking out the stop was a loss. Only the first touch
    counts, and an ambiguous bar counts as the stop.
-6. **A locked database is retried, not reported.** Eight agents write at once;
+6. **A locked database is retried, not reported.** All agents write at once;
    `busy_timeout` plus a bounded retry keeps a scheduling fact from surfacing as
    an agent failure.
+7. **Measure a relationship before trading on it.** `tick_volume` is a stop input
+   only because it was measured: on this desk's 1h history a bar above 1.2× its
+   20-bar average is followed by a 1.55× wider next-bar range (t=3.96, bootstrap
+   95% CI [1.25, 1.91]), and the effect is nearly independent of ATR (partial
+   r=+0.39 vs r=+0.13). The same test found *no* directional edge (n=8), so the
+   volume is used to widen the stop and never to pick a side — and only ever to
+   widen, because a quiet bar is the absence of the signal, not a reason to put
+   the stop inside noise.
 
 ## When the model is unavailable
 

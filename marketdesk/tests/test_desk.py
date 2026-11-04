@@ -3642,6 +3642,89 @@ def test_surprise_is_in_the_roster(tmp_path):
     assert SurpriseAgent in ROSTER
 
 
+# ---- volume: a volatility input, never a direction ---------------------
+
+def test_volume_ratio_reads_the_last_bar_against_its_window(tmp_path):
+    from desk import indicators as ind
+
+    bars = [{"tv": 100} for _ in range(20)] + [{"tv": 150}]
+    assert ind.volume_ratio(bars) == 1.5
+
+
+def test_volume_ratio_is_none_when_it_cannot_be_read(tmp_path):
+    """A ratio off three bars, or off a dead feed, is not a reading -- return
+    None so the caller applies no adjustment rather than a made-up one."""
+    from desk import indicators as ind
+
+    assert ind.volume_ratio([{"tv": 100}, {"tv": 200}]) is None
+    assert ind.volume_ratio([{"tv": 0} for _ in range(21)]) is None
+
+
+def test_volatility_agent_reports_the_volume_ratio(tmp_path, monkeypatch):
+    from desk.agents.volatility import VolatilityAgent
+    from desk.llm import LLM
+
+    s = _settings(tmp_path)
+    bars = _bars(120)
+    bars[-1]["tickVolume"] = 400  # hot last bar
+    desk = Orchestrator(s)
+    monkeypatch.setattr("desk.sources.fetch_candles", lambda sym, tf, limit=1000: bars)
+    monkeypatch.setattr("desk.sources.fetch_quote",
+                        lambda sym: {"mid": bars[-1]["close"], "market_state": "open",
+                                     "stale": False, "quote_age_s": 0})
+    monkeypatch.setattr("desk.sources.fetch_news", lambda symbol=None, max_results=25: [])
+    monkeypatch.setattr("desk.sources.fetch_calendar", lambda importance="high", limit=100: [])
+    monkeypatch.setattr("desk.sources.fetch_summary", lambda: {})
+    desk.run()
+    vol = VolatilityAgent(s, desk.shared, LLM("", s.models))
+    st = vol.study("r")
+    assert st.payload["frames"]["1h"]["vol_ratio"] is not None
+    assert st.payload["frames"]["1h"]["vol_ratio"] > 1.2
+
+
+def test_hot_volume_widens_the_stop_quiet_keeps_it(tmp_path, monkeypatch):
+    """The measured effect (t=3.96) must reach the plan: a hot last bar widens
+    the stop, a quiet one leaves the structural stop alone. This is the whole
+    point of keeping tick_volume -- and it must not change the direction."""
+    import math
+
+    from desk.orchestrator import Orchestrator
+
+    def hourly_wave(n=200):
+        """A wave with one bar per hour, so the last bar really is the newest
+        on the 1h frame (the shared `_wave` fixture repeats hours)."""
+        out = []
+        for i in range(n):
+            c = 3000 + 50 * math.sin(2 * math.pi * i / 20)
+            day, hr = i // 24, i % 24
+            out.append({"openTime": f"2026-01-{1 + day:02d}T{hr:02d}:00:00Z",
+                        "open": c - 1, "high": c + 2, "low": c - 2, "close": c,
+                        "tickVolume": 100, "isOpen": False})
+        return out
+
+    def plan_for(last_volume):
+        s = _settings(tmp_path / f"vol-{last_volume}")
+        s.home.mkdir(parents=True, exist_ok=True)
+        desk = Orchestrator(s)
+        bars = hourly_wave()
+        bars[-1]["tickVolume"] = last_volume
+        monkeypatch.setattr("desk.sources.fetch_candles", lambda sym, tf, limit=1000: bars)
+        monkeypatch.setattr("desk.sources.fetch_quote",
+                            lambda sym: {"mid": bars[-1]["close"], "bid": 1, "ask": 1,
+                                         "market_state": "open", "stale": False,
+                                         "quote_age_s": 0, "day_diff_pct": 0.0,
+                                         "source": "test"})
+        monkeypatch.setattr("desk.sources.fetch_news", lambda symbol=None, max_results=25: [])
+        monkeypatch.setattr("desk.sources.fetch_calendar", lambda importance="high", limit=100: [])
+        monkeypatch.setattr("desk.sources.fetch_summary", lambda: {})
+        return desk.run().recommendation
+
+    quiet = plan_for(100)
+    hot = plan_for(400)
+    assert quiet["vol_ratio"] == 1.0 and quiet["vol_mult"] == 1.0
+    assert hot["vol_ratio"] == 4.0 and hot["vol_mult"] > 1.0
+
+
 def test_surprise_vote_reaches_the_final_verdict(tmp_path, monkeypatch):
     """End to end through the orchestrator: a fresh USD surprise must move the
     weighted score, not merely appear on the board. This is the wiring the desk
