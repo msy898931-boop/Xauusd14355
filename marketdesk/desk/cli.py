@@ -478,6 +478,18 @@ def cmd_telegram(args) -> int:
         "last_error": info.get("last_error_message") or None,
         "transport": "webhook" if url else "poll",
     }
+    # The chat the desk will actually send to. "The bot works" and "you see the
+    # messages" are different claims: a chat_id pointing at the wrong chat sends
+    # fine and reaches nobody the owner is looking at. getChat names it without
+    # printing the id, which is the honest way to close that gap.
+    chat = bot.get_chat()
+    if chat:
+        out["chat"] = {
+            "type": chat.get("type"),
+            "title": chat.get("title") or chat.get("username")
+                     or " ".join(filter(None, [chat.get("first_name"),
+                                               chat.get("last_name")])),
+        }
     print(json.dumps(out, ensure_ascii=False, indent=2))
     if url and info.get("last_error_message"):
         print(f"\n⚠ Telegram could not deliver to {url}: "

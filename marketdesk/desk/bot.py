@@ -229,10 +229,26 @@ class TelegramBot:
             raise TelegramError(f"getUpdates rejected: {body.get('description')}")
         return body.get("result") or []
 
+    def get_chat(self) -> dict:
+        """Name the configured chat, without exposing its id.
+
+        "The bot sends fine" and "the owner sees the messages" are two different
+        claims. A chat_id that points at the wrong chat (an old DM, a group the
+        bot was removed from) sends successfully and reaches nobody the owner is
+        looking at. `getChat` is the only honest way to tell them apart.
+        Returns `{}` when the token or chat is unusable -- itself an answer.
+        """
+        if not (self.token and self.chat_id):
+            return {}
+        try:
+            body = self._call("getChat", {"chat_id": self.chat_id})
+        except (urllib.error.URLError, urllib.error.HTTPError, ValueError,
+                TimeoutError, KeyError):
+            return {}
+        return body.get("result") or {}
+
     def webhook_info(self) -> dict:
         """What Telegram currently believes about this bot's transport.
-
-        The only honest way to ask 'is a webhook registered, and is it healthy?'.
         Telegram reports the URL, whether the last delivery failed, and the error
         it hit -- so a stale URL or a rejected secret is visible rather than
         guessed at. Returns `{}` when the token is unusable, which is itself the
