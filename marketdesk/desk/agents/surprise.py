@@ -34,8 +34,9 @@ Honest limits, stated where they belong:
     a long-run gold positive and a same-day gold negative; this agent models the
     day, which is the horizon the desk trades.
   * a surprise decays. A print two hours old has been priced; the window is
-    bounded (DESK_SURPRISE_WINDOW_H) and the payload says how old the newest
-    print is, so a stale vote is visible rather than silent.
+    bounded (DESK_SURPRISE_WINDOW_H) and the score is weighted by age with a
+    half-life of a third of that window, so the cutoff is a slope, not a cliff,
+    and the payload says how old the newest print is.
   * with no fresh print the agent does not vote at all -- a neutral stance from
     "nothing happened" is not the same claim as a neutral stance from balance,
     and conflating them is how a non-event becomes a permanent bias.
@@ -199,11 +200,23 @@ class SurpriseAgent(Agent):
                          {"events": [], "fresh": 0, "dropped": dropped,
                           "window_h": self.settings.surprise_window_h})
 
-        # Mean over the fresh releases: several releases in one slot are one
-        # macro moment, and summing them would count a correlated pair twice.
-        score = sum(e["score"] for e in events) / len(events)
+        # Recency-weighted mean, for two reasons that pull the same way:
+        #   * several releases in one slot are one macro moment, so the mean --
+        #     not the sum -- is what avoids counting a correlated pair twice;
+        #   * a surprise is priced within the first hour or two, so a print near
+        #     the window edge must not weigh the same as a fresh one. The age is
+        #     already computed; ignoring it here would report a staleness the
+        #     score did not act on.
+        # The half-life is derived from the window (a third of it), so there is
+        # no second knob to keep in sync: the window is the hard cutoff and the
+        # decay is what makes that cutoff continuous rather than a cliff.
+        half_life = max(self.settings.surprise_window_h / 3.0, 0.25)
+        for e in events:
+            e["weight"] = round(0.5 ** (e["age_h"] / half_life), 4)
+        wsum = sum(e["weight"] for e in events) or 1.0
+        score = sum(e["score"] * e["weight"] for e in events) / wsum
         score = max(-1.0, min(1.0, score))
-        mean_abs = sum(abs(e["score"]) for e in events) / len(events)
+        mean_abs = sum(abs(e["score"]) * e["weight"] for e in events) / wsum
         conf = min(1.0, 0.4 + 0.3 * len(events) + 0.3 * mean_abs)
         stance = self.stance_of(score)
 

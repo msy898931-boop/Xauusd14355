@@ -3613,6 +3613,26 @@ def test_surprise_weights_by_relative_size(tmp_path):
     assert abs(big) > abs(small)
 
 
+def test_surprise_decays_with_age(tmp_path):
+    """Between two opposite prints of equal size, the fresher one must win. With
+    a single event the weight normalises out, so this is the case that actually
+    exercises the decay -- without it the two would cancel to neutral."""
+    from desk.agents.surprise import SurpriseAgent
+    from desk.llm import LLM
+
+    s = _settings(tmp_path)
+    shared = SharedMemory(s.shared_db)
+    shared.save_calendar([
+        # fresh, bullish for gold: ISM Manufacturing missed 54.7 -> 54.0
+        _cal_event("ISM Manufacturing PMI", 54.0, 54.7, hours_ago=0.25),
+        # stale, bearish for gold: ISM Services beat 55.2 -> 55.9
+        _cal_event("ISM Services PMI", 55.9, 55.2, hours_ago=5.5),
+    ])
+    st = SurpriseAgent(s, shared, LLM("", s.models)).study("r")
+    assert st.score > 0, "the fresh bullish print must outweigh the stale bearish one"
+    assert st.payload["events"][0]["weight"] > st.payload["events"][1]["weight"]
+
+
 def test_surprise_is_in_the_roster(tmp_path):
     """A new agent that is not registered does not run -- the wiring is the
     feature."""
