@@ -122,3 +122,12 @@ Detail for all of these lives in `MARKETDESK.md`; the daily log is `2026-11-02.m
 - **`origin` had a stale embedded token** that hung `git push` on a password prompt;
   fix = `git remote set-url origin https://${GITHUB_TOKEN}@github.com/...` +
   `GIT_TERMINAL_PROMPT=0`.
+- ⭐ **A level is not a position.** The desk printed entry/stop/target in points and
+  never a lot size or dollar risk — fatal on a small account. XAUUSD 1 lot = 100 oz
+  ($1 move = $100), min lot 0.01 → a 42-pt gold stop risks **$42 = 21% of $200**;
+  at 1% risk the widest affordable stop is **2 points**. `desk/account.py` sizes
+  every plan/scenario (`lots = risk/(stop_dist×100)`, **floored** — never rounded
+  up), refuses an unsizeable setup **with the number that proves it**, and takes a
+  hard `DESK_MAX_STOP_POINTS` cap. `desk account` shows it; `DESK_BALANCE=0` keeps
+  points-only. **A stop is not a risk until it meets a lot size and a balance.**
+
