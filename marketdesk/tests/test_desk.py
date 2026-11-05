@@ -4501,3 +4501,50 @@ def test_daemon_map_stamp_a_torn_file_is_not_a_missing_day(tmp_path, monkeypatch
     from desk.daemon import Daemon
     d2 = Daemon(_settings(tmp_path))
     assert d2.last_map_date is None
+
+
+def test_cli_map_once_a_day_sends_one_and_stamps_the_date(tmp_path, monkeypatch):
+    """The map must go out from the cron without the Render daemon, and exactly
+    once: a later run the same day is a no-op. A failed send is NOT stamped, so
+    the next run retries rather than losing the day."""
+    import datetime as _dt
+
+    from desk import cli
+    from desk.config import Settings
+
+    s = Settings()
+    s.home = tmp_path
+    monkeypatch.setattr(cli, "_settings", lambda args: s)
+    monkeypatch.setattr("desk.actions.Actions.map", lambda self: "خريطة")
+    sent: list[str] = []
+    monkeypatch.setattr("desk.notify.Notifier.send", lambda self, t: sent.append(t) or True)
+
+    class A:
+        once_a_day = True
+
+    assert cli.cmd_map(A()) == 0
+    assert sent == ["خريطة"]
+    today = _dt.datetime.now(_dt.UTC).date().isoformat()
+    from desk.daemon import _load_map_date
+    assert _load_map_date(s) == today
+
+    assert cli.cmd_map(A()) == 0          # same day: no second send
+    assert sent == ["خريطة"]
+
+
+def test_cli_map_once_a_day_retries_after_a_failed_send(tmp_path, monkeypatch):
+    from desk import cli
+    from desk.config import Settings
+
+    s = Settings()
+    s.home = tmp_path
+    monkeypatch.setattr(cli, "_settings", lambda args: s)
+    monkeypatch.setattr("desk.actions.Actions.map", lambda self: "خريطة")
+    monkeypatch.setattr("desk.notify.Notifier.send", lambda self, t: False)
+
+    class A:
+        once_a_day = True
+
+    assert cli.cmd_map(A()) == 1
+    from desk.daemon import _load_map_date
+    assert _load_map_date(s) is None      # not stamped: owed again

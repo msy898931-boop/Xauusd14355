@@ -218,10 +218,33 @@ def cmd_map(args) -> int:
     Reads what a run already stored -- closed frames and a live quote -- and
     computes the zones itself. It starts no agent and calls no model, so it is
     cheap enough to run once a day on a schedule.
+
+    `--once-a-day` guards the schedule so a 15-minute cron sends it once: the
+    date is stamped in a file beside the desk state, so a run later the same day
+    is a no-op. This is what lets the map go out from the GitHub cron alone,
+    with no always-on host to depend on.
     """
     from .actions import Actions
 
     s = _settings(args)
+    if getattr(args, "once_a_day", False):
+        import datetime as _dt
+
+        from .daemon import _load_map_date, _save_map_date
+
+        today = _dt.datetime.now(_dt.UTC).date().isoformat()
+        if _load_map_date(s) == today:
+            print(f"map already sent today ({today})")
+            return 0
+        text = Actions(s).map()
+        from .notify import Notifier
+
+        ok = Notifier(s).send(text)
+        print(f"map sent: {ok}")
+        # Stamp only on success, so a failed send is retried by the next run.
+        if ok:
+            _save_map_date(s, today)
+        return 0 if ok else 1
     text = Actions(s).map()
     if getattr(args, "send", False):
         from .notify import Notifier
@@ -664,6 +687,8 @@ def main(argv=None) -> int:
     mp.add_argument("--symbol", default=None)
     mp.add_argument("--send", action="store_true",
                     help="deliver to the chat instead of printing")
+    mp.add_argument("--once-a-day", dest="once_a_day", action="store_true",
+                    help="send at most one map per day, stamping the date")
     mp.set_defaults(func=cmd_map)
 
     pl = sub.add_parser("plan", help="live two-sided plan with stop and target ladder")

@@ -134,6 +134,17 @@ jobs:
         # anyone pressing a button.
         run: python3 -m desk.cli watch
 
+      # The daily map, sent from THIS cron rather than the Render daemon. The
+      # daemon is a single point of failure -- it was suspended once already --
+      # and the map is a fixed daily message, which a schedule is exactly right
+      # for. `--once-a-day` stamps the date in the cached desk state, so the
+      # 15-minute cron sends one map and the rest are no-ops.
+      - name: The daily map (once a day)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 -m desk.cli map --once-a-day
+
       # Print the running record into the log. The desk is silent by design, so
       # without this the only place the scoreboard exists is a Telegram button --
       # and a record nobody reads is a record that cannot correct anything. This
