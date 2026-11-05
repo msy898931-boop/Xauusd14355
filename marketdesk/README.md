@@ -157,7 +157,7 @@ it. If no real level clears the bar, the desk states no plan rather than a losin
 one — and a projection is used only when there is no structure on that side at
 all, tagged as the weakest kind.
 
-## Nine rules the desk holds itself to
+## Ten rules the desk holds itself to
 
 These are not style preferences; each one was a real defect found by measurement.
 
@@ -212,6 +212,17 @@ These are not style preferences; each one was a real defect found by measurement
    again. A plan that never fires expires (`DESK_PLAN_EXPIRY_S`, default 24h),
    and a plan the desk's own fresh read now contradicts is dropped and said so.
    A finished plan is cleared, never followed forever.
+10. **A level is not a position — a small account needs the lot size.** A plan
+   that says "short 4,120, stop 4,162" says nothing about how many lots, and on a
+   $200 account that gap is the whole risk: the smallest gold lot (0.01) risks
+   $42, or 21% of the account. `desk/account.py` turns every plan and scenario
+   into money — `lots = risk_budget / (stop_distance × 100 oz)` — and **floors**
+   the size to the broker's lot step, because rounding 0.006 lots *up* to 0.01
+   silently risks more than the budget. When the minimum lot over-risks anyway,
+   the desk refuses the setup and prints the number that proves it rather than a
+   size that looks fine and is not. `desk account` shows it on demand;
+   `DESK_BALANCE`, `DESK_RISK_PCT`, and `DESK_MAX_STOP_POINTS` configure it; with
+   no balance the desk prints levels only, as before.
 
 ## When the model is unavailable
 

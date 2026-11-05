@@ -17,6 +17,7 @@ import datetime as dt
 
 from . import arabic as ar
 from . import indicators as ind
+from .account import size_plan
 from .config import base_currency
 
 # A level's stop is the ATR of the frame that printed it: a 1h shelf plays out
@@ -131,7 +132,9 @@ def _next_event(cal: list[dict], now: dt.datetime, window_h: float,
 def build(bars_by_frame: dict[str, list[dict]], live: float,
           calendar: list[dict] | None = None, *,
           now: dt.datetime | None = None, window_h: float = 6.0,
-          symbol: str = "XAUUSD") -> dict:
+          symbol: str = "XAUUSD", balance: float = 0.0, risk_pct: float = 1.0,
+          contract_size: float = 100.0, lot_step: float = 0.01,
+          spread: float = 0.25, max_stop_points: float = 0.0) -> dict:
     """The scenario set: a breakout, a rejection, a deeper move, and the event.
 
     `bars_by_frame` is closed-bar frames (the agent `frames_data` shape). Frames
@@ -169,13 +172,21 @@ def build(bars_by_frame: dict[str, list[dict]], live: float,
             target = target_c["price"] if target_c else level["price"] - 2 * atr
         risk = abs(level["price"] - stop)
         rr = abs(target - level["price"]) / risk if risk else None
-        return {
+        sc = {
             "kind": kind, "side": side, "frame": level["frame"],
             "trigger": round(level["price"], 2), "confirm": round(confirm_px, 2),
             "stop": round(stop, 2), "targets": [round(target, 2)],
             "risk": round(risk, 2), "rr": round(rr, 2) if rr else None,
             "why": why,
         }
+        # Size the scenario in money, for the account the caller named. Kept in
+        # points when no balance is set, so the desk still works keyless.
+        if balance > 0:
+            sc["sizing"] = size_plan(
+                balance=balance, risk_pct=risk_pct, entry=level["price"],
+                stop=stop, target=target, contract_size=contract_size,
+                lot_step=lot_step, spread=spread, max_stop_points=max_stop_points)
+        return sc
 
     if above:
         out["scenarios"].append(scenario(
@@ -236,6 +247,18 @@ def render(sc: dict) -> str:
         rr = f" · R:R {s['rr']}" if s.get("rr") else ""
         L.append(f"      الوقف {s['stop']:,.2f} ({s['risk']:,.0f} نقطة){rr} · الهدف "
                  + "، ".join(f"{t:,.2f}" for t in s["targets"]))
+        sz = s.get("sizing")
+        if sz is not None:
+            if sz.feasible:
+                money = (f"💵 <b>{sz.lots:g} لوت</b> · تخاطر "
+                         f"<b>${sz.risk_money:,.2f}</b> ({sz.risk_pct_actual:.1f}%)")
+                if sz.reward_money is not None:
+                    money += f" · تربح ${sz.reward_money:,.2f}"
+                L.append(f"      {money}")
+            else:
+                L.append(f"      🚫 <b>ما بتنفع لهالحساب</b> — أصغر حجم "
+                         f"({sz.min_lots:g}) يخاطر ${sz.min_risk_money:,.2f} "
+                         f"= {sz.min_risk_pct:.1f}%")
         L.append(f"      <i>{s['why']}</i>")
         if s.get("frames_with"):
             L.append(f"      <i>يتوافق مع: {'، '.join(s['frames_with'])}</i>")

@@ -210,3 +210,28 @@ def one_line(plan: ActivePlan, live: float) -> str:
            "invalidated": "انتهت بلا تفعيل"}.get(plan.status, plan.status)
     return (f"  خطة نشطة: {d} · دخول {plan.entry:,.2f} · وقف {plan.stop:,.2f} · "
             f"هدف {plan.target:,.2f} · {tag}")
+
+
+def sizing_line(plan: ActivePlan, settings) -> str | None:
+    """The money view of the plan in play, for the account the desk was given.
+
+    Returns None when no balance is configured, so a keyless desk still prints
+    levels and nothing more. The size is computed from the plan's own entry and
+    stop, so what the reader sees is what this plan costs them.
+    """
+    if not getattr(settings, "balance", 0):
+        return None
+    from .account import size_plan
+
+    sz = size_plan(balance=settings.balance, risk_pct=settings.risk_pct,
+                   entry=plan.entry, stop=plan.stop, target=plan.target,
+                   contract_size=settings.contract_size,
+                   lot_step=settings.lot_step, spread=settings.spread,
+                   max_stop_points=getattr(settings, "max_stop_points", 0.0))
+    if not sz.feasible:
+        return (f"  💵 الحساب ${settings.balance:,.0f}: 🚫 الوقف واسع — أصغر حجم "
+                f"({sz.min_lots:g}) يخاطر ${sz.min_risk_money:,.2f} "
+                f"({sz.min_risk_pct:.1f}%)")
+    return (f"  💵 الحساب ${settings.balance:,.0f} · {sz.lots:g} لوت · "
+            f"خسارة الوقف ${sz.risk_money:,.2f} ({sz.risk_pct_actual:.1f}%) · "
+            f"ربح الهدف ${sz.reward_money:,.2f}")

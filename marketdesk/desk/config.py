@@ -149,6 +149,28 @@ class Settings:
     # goes silent exactly when the market is deciding something. Set
     # DESK_WATCH_SCENARIOS=0 to watch the plan alone.
     watch_scenarios: bool = os.environ.get("DESK_WATCH_SCENARIOS", "1") != "0"
+    # ---- position sizing -------------------------------------------------
+    # The account the desk sizes every plan for. A level and a stop say where to
+    # act; they say nothing about how many lots, and a small account is where
+    # that gap is fatal. 0 disables the money view entirely.
+    balance: float = float(os.environ.get("DESK_BALANCE", "0"))
+    # The fraction of the balance one stop-out may cost. 1-2% is the standard
+    # rule; the desk defaults to 1 because the owner's account is small and the
+    # minimum gold lot is already large relative to it.
+    risk_pct: float = float(os.environ.get("DESK_RISK_PCT", "1"))
+    # Ounces one lot controls. 100 is the standard gold contract and the figure
+    # every broker specification agrees on; overridable for a non-standard feed.
+    contract_size: float = float(os.environ.get("DESK_CONTRACT_SIZE", "100"))
+    # The smallest volume the broker accepts, and the step between sizes. Sizes
+    # are floored to this -- rounding up would risk more than the budget.
+    lot_step: float = float(os.environ.get("DESK_LOT_STEP", "0.01"))
+    # A typical gold spread in price points, for stating the cost of a trade.
+    # An estimate, labelled as one; never an input to the size.
+    spread: float = float(os.environ.get("DESK_SPREAD", "0.25"))
+    # The widest stop the owner will accept, in price points (0 = no cap). A stop
+    # the trader will not honour is not a stop: a setup beyond it is refused
+    # whatever the lot size, and the desk says so instead of sizing it anyway.
+    max_stop_points: float = float(os.environ.get("DESK_MAX_STOP_POINTS", "0"))
 
     @property
     def shared_db(self) -> Path:

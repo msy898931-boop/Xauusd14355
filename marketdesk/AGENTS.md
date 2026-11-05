@@ -86,6 +86,15 @@ python3 -m ruff check .             # lint
     both exist so the owner hears what *changed*. A plan that never fires expires;
     a plan the fresh read contradicts is dropped and said so; a finished plan is
     cleared.
+21. **A level is not a position — a small account needs the lot size.** A plan
+    that says "short 4,120, stop 4,162" says nothing about how many lots or what
+    a stop-out costs, and on a $200 account that gap is fatal: the smallest gold
+    lot (0.01) risks $42 = 21% of the account. `desk/account.py` sizes every plan
+    and scenario in money (`lots = risk_budget / (stop_distance × 100oz)`), **floors**
+    the size to the broker lot step (never rounds up — rounding up silently
+    over-risks), and refuses a setup it cannot size, printing the number that
+    proves why. `DESK_BALANCE`/`DESK_RISK_PCT`/`DESK_MAX_STOP_POINTS` configure it;
+    `desk account` shows it on demand; with no balance the desk prints levels only.
 
 ## Environment quirks
 - **Groq sits behind Cloudflare and rejects urllib's default User-Agent with

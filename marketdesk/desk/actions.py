@@ -274,7 +274,11 @@ class Actions:
                           for r in rows]
         cal = self.shared.load_calendar()
         sc = S.build(frames, live, cal, window_h=self.settings.event_window_h,
-                     symbol=self.settings.symbol)
+                     symbol=self.settings.symbol, balance=self.settings.balance,
+                     risk_pct=self.settings.risk_pct,
+                     contract_size=self.settings.contract_size,
+                     lot_step=self.settings.lot_step, spread=self.settings.spread,
+                     max_stop_points=self.settings.max_stop_points)
         return S.render(sc)
 
     def gold(self) -> str:

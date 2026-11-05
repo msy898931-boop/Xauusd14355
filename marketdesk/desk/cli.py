@@ -391,6 +391,55 @@ def cmd_check_alerts(args) -> int:
     return 0
 
 
+def cmd_account(args) -> int:
+    """Size the plan in play (or a scenario) for the account, in money.
+
+    This is the question the price levels do not answer: how many lots, and what
+    a stop-out costs. On a small account the answer is often "you cannot take
+    this one", and this says so with the number that proves it.
+    """
+    from . import active, sources
+    from .account import render, size_plan
+
+    s = _settings(args)
+    if args.balance is not None:
+        s.balance = args.balance
+    if args.risk is not None:
+        s.risk_pct = args.risk
+    if args.max_stop is not None:
+        s.max_stop_points = args.max_stop
+    if not s.balance:
+        print("ما في حساب محدد. مرّر --balance 200 (أو DESK_BALANCE=200).")
+        return 2
+
+    if args.entry is not None and args.stop is not None:
+        sz = size_plan(balance=s.balance, risk_pct=s.risk_pct, entry=args.entry,
+                       stop=args.stop, target=args.target,
+                       contract_size=s.contract_size, lot_step=s.lot_step,
+                       spread=s.spread, max_stop_points=s.max_stop_points)
+        print(render(sz, s.symbol, args.direction or ""))
+        return 0
+
+    plan = active.load(s)
+    if plan is None:
+        print("ما في خطة نشطة نسعّرها. مرّر --entry و --stop، أو خزّن خطة أولاً.")
+        return 0
+    sz = size_plan(balance=s.balance, risk_pct=s.risk_pct, entry=plan.entry,
+                   stop=plan.stop, target=plan.target,
+                   contract_size=s.contract_size, lot_step=s.lot_step,
+                   spread=s.spread, max_stop_points=s.max_stop_points)
+    print(render(sz, s.symbol, plan.direction))
+    try:
+        live = float(sources.fetch_quote(s.symbol)["mid"])
+        pnl = (plan.entry - live) if plan.direction == "short" else (live - plan.entry)
+        if sz.feasible:
+            print(f"\nالصفقة هلق: {pnl:+.2f}$ لكل أونصة → "
+                  f"<b>${pnl * sz.lots * s.contract_size:+,.2f}</b> على الحساب")
+    except Exception:  # noqa: BLE001 - a dead feed must not hide the sizing
+        pass
+    return 0
+
+
 def cmd_plan_status(args) -> int:
     """Show the one plan the desk is following, and its status.
 
@@ -659,6 +708,18 @@ def main(argv=None) -> int:
     ps.add_argument("--symbol", default=None)
     ps.add_argument("--clear", action="store_true", help="forget the active plan")
     ps.set_defaults(func=cmd_plan_status)
+
+    ac = sub.add_parser("account", help="size the plan in money for an account")
+    ac.add_argument("--symbol", default=None)
+    ac.add_argument("--balance", type=float, default=None)
+    ac.add_argument("--risk", type=float, default=None, help="percent per trade")
+    ac.add_argument("--entry", type=float, default=None)
+    ac.add_argument("--stop", type=float, default=None)
+    ac.add_argument("--target", type=float, default=None)
+    ac.add_argument("--direction", default=None)
+    ac.add_argument("--max-stop", type=float, default=None,
+                    help="refuse a stop wider than this, in points")
+    ac.set_defaults(func=cmd_account)
 
     b = sub.add_parser("bot", help="one poll pass: answer button presses")
     b.add_argument("--symbol", default=None)

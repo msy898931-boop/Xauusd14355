@@ -384,6 +384,9 @@ class Orchestrator:
         _live = self._live_price_from_rec(rec)
         if _plan is not None and _live is not None:
             rec["active_plan_line"] = _active.one_line(_plan, _live)
+            _sz = _active.sizing_line(_plan, self.settings)
+            if _sz:
+                rec["active_plan_line"] += "\n" + _sz
         duration = time.time() - started
         run = Run(run_id, self.settings.symbol, started, studies, verdict, score,
                   rec, errors, duration)

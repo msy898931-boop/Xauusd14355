@@ -4092,3 +4092,116 @@ def test_surprise_vote_reaches_the_final_verdict(tmp_path, monkeypatch):
     # weight were dropped, the two runs would be identical.
     assert loud.score < quiet.score, "the surprise vote must reach the tally"
 
+
+
+# ---- account sizing ---------------------------------------------------
+
+def test_size_is_floored_to_the_lot_step_and_reports_the_real_risk():
+    """A size must never round UP: 0.006 lots is 0.00, not 0.01. Rounding up
+    silently risks more than the budget, which is the one thing sizing exists to
+    prevent. The reported risk must come from the size actually traded."""
+    from desk.account import size_plan
+    # $5000 * 1% = $50 budget; a $50 stop over 100oz = $5000 risk per lot -> 0.01
+    sz = size_plan(balance=5000, risk_pct=1, entry=4000, stop=3950)
+    assert sz.feasible
+    assert sz.lots == 0.01
+    assert abs(sz.risk_money - 50.0) < 1e-9
+    # A size that would need 0.0199 lots must floor to 0.01, not round to 0.02.
+    sz2 = size_plan(balance=5000, risk_pct=1, entry=4000, stop=3980)  # 0.025 -> 0.02
+    assert sz2.lots == 0.02
+    sz3 = size_plan(balance=1000, risk_pct=1, entry=4000, stop=3980)  # 0.005 -> 0.00
+    assert not sz3.feasible
+
+
+def test_a_stop_too_wide_for_the_account_is_refused_with_the_number():
+    """On a $200 account the smallest gold lot risks 21% on a 42-point stop.
+    The honest answer is 'you cannot take this', and it must carry the number
+    that proves it -- not a size that looks fine and is not."""
+    from desk.account import size_plan
+    sz = size_plan(balance=200, risk_pct=2, entry=4120, stop=4162.15, target=4082.99)
+    assert not sz.feasible
+    assert sz.lots == 0.0
+    assert abs(sz.min_risk_money - 42.15) < 1e-6      # 0.01 lot * 42.15 * 100
+    assert abs(sz.min_risk_pct - 21.075) < 1e-6
+    assert "21.1%" in sz.note or "21.1%" in sz.note.replace("21.07", "21.1")
+
+
+def test_the_owner_short_sizes_on_a_larger_account():
+    """The same trade that is impossible on $200 becomes 0.01 lots once the
+    budget clears the minimum lot -- and the money must match the arithmetic."""
+    from desk.account import size_plan
+    # $10000 * 1% = $100 budget / (42.15 * 100) = 0.0237 -> floor 0.02 lots
+    sz = size_plan(balance=10000, risk_pct=1, entry=4120, stop=4162.15, target=4082.99)
+    assert sz.feasible
+    assert sz.lots == 0.02
+    assert abs(sz.risk_money - 84.30) < 1e-6          # 0.02 * 42.15 * 100
+    assert abs(sz.reward_money - 74.02) < 1e-6        # 0.02 * 37.01 * 100
+
+
+def test_a_zero_distance_stop_does_not_divide_by_zero():
+    from desk.account import size_plan
+    sz = size_plan(balance=200, risk_pct=1, entry=4120, stop=4120)
+    assert not sz.feasible
+    assert sz.lots == 0.0
+    assert sz.risk_money == 0.0
+
+
+def test_scenarios_carry_sizing_only_when_a_balance_is_given():
+    """No balance -> points only, so a keyless desk still works. A balance ->
+    every scenario is sized in money, and the render shows it."""
+    from desk import scenarios as S
+    # two printed levels above and below a live price
+    bars = []
+    for i in range(60):
+        px = 4000 + (i % 10)
+        bars.append({"o": px, "h": px + 8, "l": px - 8, "c": px + 1, "open": False})
+    frames = {"1h": bars, "4h": bars, "1d": bars}
+    live = 4004.0
+    plain = S.build(frames, live)
+    assert all("sizing" not in s for s in plain["scenarios"])
+    assert "لوت" not in S.render(plain)
+    sized = S.build(frames, live, balance=200, risk_pct=1)
+    assert sized["scenarios"], "the fixture must print at least one level"
+    assert all("sizing" in s for s in sized["scenarios"])
+    # On $200 these 1h-ATR stops are infeasible, so the money view is a refusal --
+    # but it must be there, with the dollars, not silently dropped.
+    r = S.render(sized)
+    assert "🚫" in r and "$" in r
+
+
+def test_sizing_line_is_absent_without_a_balance_and_present_with_one(tmp_path):
+    from desk import active
+    s = _settings(tmp_path)
+    plan = active.adopt(s, {"direction": "short", "entry": 4120.0,
+                            "stop": 4162.15, "targets": [{"level": 4082.99}]}, "r")
+    assert plan is not None
+    s.balance = 0
+    assert active.sizing_line(plan, s) is None
+    s.balance = 200
+    line = active.sizing_line(plan, s)
+    assert line is not None and "🚫" in line and "21.1%" in line
+
+
+def test_a_stop_wider_than_the_owners_cap_is_refused_outright():
+    """The owner allows 10 points. A 42-point stop is refused because the stop is
+    unaffordable as a *setup*, not because of the lot size -- and the refusal must
+    say which, so the reader is not told 'increase your account' when the real
+    problem is the stop."""
+    from desk.account import size_plan
+    # At 2% the budget is $4, but the minimum lot on a 10-point stop risks $10.
+    # So the cap is not the binding limit here -- the money is.
+    tight = size_plan(balance=200, risk_pct=2, entry=4120, stop=4130,
+                      max_stop_points=10)
+    assert not tight.feasible and "سقفك" not in tight.note
+    # At 5% the budget is exactly $10 = 0.01 lot on a 10-point stop, so it fits.
+    ok = size_plan(balance=200, risk_pct=5, entry=4120, stop=4130,
+                   max_stop_points=10)
+    assert ok.feasible and ok.lots == 0.01
+    # A 42-point stop is refused because of the CAP, and the note must say so.
+    wide = size_plan(balance=200, risk_pct=5, entry=4120, stop=4162.15,
+                     max_stop_points=10)
+    assert not wide.feasible
+    assert "سقفك" in wide.note
+    # With no cap, the same stop falls back to the money rule (min lot over-risks).
+    uncapped = size_plan(balance=200, risk_pct=5, entry=4120, stop=4162.15)
+    assert not uncapped.feasible and "سقفك" not in uncapped.note
