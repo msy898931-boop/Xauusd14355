@@ -62,6 +62,11 @@ services:
       # default; it is written here so the number is visible, not implied.
       - key: DESK_PING_EVERY
         value: "600"
+      # The daily map goes out once a day at this UTC hour (the owner is UTC+2/
+      # +3, so 7 UTC is a morning map before the London session). Written here so
+      # the hour is visible rather than implied by the code default.
+      - key: DESK_MAP_HOUR
+        value: "7"
       - key: DESK_ALERT_SCORE
         value: "0.25"
       - key: DESK_MIN_RR

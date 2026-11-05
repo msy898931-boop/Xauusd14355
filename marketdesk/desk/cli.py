@@ -212,6 +212,28 @@ def cmd_scenarios(args) -> int:
     return 0
 
 
+def cmd_map(args) -> int:
+    """The daily map: buy zones, sell zones, liquidity, trend.
+
+    Reads what a run already stored -- closed frames and a live quote -- and
+    computes the zones itself. It starts no agent and calls no model, so it is
+    cheap enough to run once a day on a schedule.
+    """
+    from .actions import Actions
+
+    s = _settings(args)
+    text = Actions(s).map()
+    if getattr(args, "send", False):
+        from .notify import Notifier
+
+        n = Notifier(s)
+        ok = n.send(text)
+        print(f"map sent: {ok}")
+        return 0 if ok else 1
+    print(text)
+    return 0
+
+
 def cmd_plan(args) -> int:
     """The live two-sided plan: where to act and where to get out, with evidence.
 
@@ -637,6 +659,12 @@ def main(argv=None) -> int:
     sn.add_argument("--send", action="store_true",
                     help="deliver to the chat instead of printing")
     sn.set_defaults(func=cmd_scenarios)
+
+    mp = sub.add_parser("map", help="the daily map: buy/sell zones, liquidity, trend")
+    mp.add_argument("--symbol", default=None)
+    mp.add_argument("--send", action="store_true",
+                    help="deliver to the chat instead of printing")
+    mp.set_defaults(func=cmd_map)
 
     pl = sub.add_parser("plan", help="live two-sided plan with stop and target ladder")
     pl.add_argument("--csv", default="../biquote/XAUUSD_1d.csv")

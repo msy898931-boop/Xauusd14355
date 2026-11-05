@@ -4333,3 +4333,136 @@ def test_scenario_levels_only_call_a_trade_when_it_pays(tmp_path):
             assert call["target"] < lv.price < call["stop"]
         rr = abs(call["target"] - lv.price) / abs(lv.price - call["stop"])
         assert rr >= 1.5 - 1e-9, f"level {lv.price} called with R:R {rr}"
+
+
+# ---- the daily map ----------------------------------------------------
+
+def _map_bars(n, start, step):
+    """Shared-memory-shaped bars for the map: a zig-zag with clear swing highs
+    and lows so the pivots and zones are deterministic."""
+    import math
+    out = []
+    for i in range(n):
+        p = start + 40 * math.sin(i / 4.0) + i * 0.1
+        out.append({"open_time": i * 60, "open": p, "high": p + 1.0,
+                    "low": p - 1.0, "close": p, "is_open": 0})
+    return out
+
+
+def test_map_zones_sit_on_printed_prices_not_forecasts():
+    """Every zone edge must be a price some bar actually printed. A map that
+    invents a level is a forecast wearing a level's clothes."""
+    from desk import map as MP
+    frames = {tf: _map_bars(80, 4000.0, 60) for tf in MP.MAP_FRAMES}
+    m = MP.build(frames, live=4000.0, symbol="XAUUSD")
+    printed = {round(b["high"], 4) for tf in frames for b in frames[tf]}
+    printed |= {round(b["low"], 4) for tf in frames for b in frames[tf]}
+    for z in m.zones:
+        assert round(z.low, 4) in printed
+        assert round(z.high, 4) in printed
+        assert z.touches >= MP.MIN_TOUCHES
+
+
+def test_map_splits_zones_by_side_of_the_price():
+    """A zone above the price is something to sell into; below it, to buy from.
+    The split must be by the live price, and each list nearest-first."""
+    from desk import map as MP
+    frames = {tf: _map_bars(80, 4000.0, 60) for tf in MP.MAP_FRAMES}
+    m = MP.build(frames, live=4000.0, symbol="XAUUSD")
+    above, below = m._split()
+    assert all(z.low > m.live for z in above)
+    assert all(z.high < m.live for z in below)
+    assert above == sorted(above, key=lambda z: z.low)
+    assert below == sorted(below, key=lambda z: -z.high)
+
+
+def test_map_is_empty_not_wrong_when_frames_are_missing():
+    """A frame the desk has not stored must contribute nothing, not a guess."""
+    from desk import map as MP
+    m = MP.build({"15m": [], "1h": None}, live=4000.0, symbol="XAUUSD")  # type: ignore[dict-item]
+    assert m.zones == []
+    assert m.trend == {}
+    text = MP.render(m)
+    assert "خريطة اليوم" in text
+    assert "ما في منطقة" in text
+
+
+def test_map_liquidity_only_lists_nearby_stop_clusters():
+    """Liquidity is where stops cluster -- repeated highs/lows. It must only
+    report the nearest on each side, or the map is a wall of numbers."""
+    from desk import map as MP
+    frames = {tf: _map_bars(120, 4000.0, 60) for tf in MP.MAP_FRAMES}
+    m = MP.build(frames, live=4000.0, symbol="XAUUSD")
+    up = [x for x in m.liquidity if x.side == "above"]
+    dn = [x for x in m.liquidity if x.side == "below"]
+    assert len(up) <= 2 and len(dn) <= 2
+    assert all(x.price > m.live for x in up)
+    assert all(x.price < m.live for x in dn)
+
+
+def test_map_render_carries_no_trade_instruction():
+    """The map is context, not a signal. It must NOT tell the reader to buy or
+    sell -- that is the level alert's job, and only when a level clears R:R."""
+    from desk import map as MP
+    frames = {tf: _map_bars(120, 4000.0, 60) for tf in MP.MAP_FRAMES}
+    text = MP.render(MP.build(frames, live=4000.0, symbol="XAUUSD"))
+    assert "اشترِ" not in text and "بِع" not in text
+
+
+def test_map_touches_plural_follows_arabic():
+    from desk.map import _touches
+    assert _touches(1) == "لمسة"
+    assert _touches(2) == "لمستان"
+    assert _touches(5) == "5 لمسات"
+    assert _touches(16) == "16 لمسة"
+
+
+def test_daemon_sends_the_map_once_a_day(tmp_path, monkeypatch):
+    """The map is a morning plan: sent once, after `map_hour`, and never twice
+    in a day -- a restart must not re-deliver it. And a failed send is retried,
+    not lost until tomorrow."""
+    import datetime as _dt
+
+    d, seen = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900)
+    d.settings.map_hour = 7
+    sent: list[str] = []
+    monkeypatch.setattr(d.notifier, "send", lambda t: sent.append(t) or True)
+    monkeypatch.setattr("desk.actions.Actions.map", lambda self: "خريطة")
+    monkeypatch.setattr("desk.daemon.market_session", lambda now=None: _OpenSession())
+
+    def at(hour):
+        return _dt.datetime(2026, 11, 5, hour, 0, tzinfo=_dt.UTC)
+
+    assert d._map_due(at(6)) is False        # before the hour: not yet
+    assert d._map_due(at(7)) is True
+    d._send_map(at(7))
+    assert sent == ["خريطة"]
+    assert d._map_due(at(9)) is False        # same day: not again
+    assert d._map_due(at(7) + _dt.timedelta(days=1)) is True
+
+
+def test_daemon_retries_the_map_when_the_send_fails(tmp_path, monkeypatch):
+    """A silent failure must not mark the day sent -- otherwise a dead token
+    costs the owner the whole day's map."""
+    import datetime as _dt
+
+    d, seen = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900)
+    d.settings.map_hour = 7
+    monkeypatch.setattr(d.notifier, "send", lambda t: False)
+    monkeypatch.setattr("desk.actions.Actions.map", lambda self: "خريطة")
+    out = d._send_map(_dt.datetime(2026, 11, 5, 8, 0, tzinfo=_dt.UTC))
+    assert out["sent"] is False
+    assert d.last_map_date is None           # still owed
+    assert d._map_due(_dt.datetime(2026, 11, 5, 9, 0, tzinfo=_dt.UTC)) is True
+
+
+def test_daemon_map_job_runs_from_the_tick(tmp_path, monkeypatch):
+    """The tick must actually reach the map job -- a job nothing calls is the
+    bug this codebase has been bitten by before."""
+    d, seen = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900)
+    d.settings.map_hour = 0
+    sent: list[str] = []
+    monkeypatch.setattr(d.notifier, "send", lambda t: sent.append(t) or True)
+    monkeypatch.setattr("desk.actions.Actions.map", lambda self: "خريطة")
+    d.tick(0.0)
+    assert sent == ["خريطة"]

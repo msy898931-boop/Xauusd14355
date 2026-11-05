@@ -113,6 +113,11 @@ class Daemon:
         self.last_level = float("-inf")
         self.last_read = float("-inf")
         self.last_ping = float("-inf")
+        # The daily map keys on the wall-clock date, not a monotonic interval:
+        # "once a day" is a calendar fact, and a monotonic counter would drift
+        # across a restart or a clock step. None means "nothing sent yet".
+        self.last_map_date: str | None = None
+        self.maps = 0
         self._stop = False
         self._was_open: bool | None = None
         # Explicit typed counters, not a `dict[str, object]`: the dict form makes
@@ -209,6 +214,39 @@ class Daemon:
             self._note_error("levels", exc)
             return {"error": exc.__class__.__name__}
 
+    def _map_due(self, now: dt.datetime | None = None) -> bool:
+        """Whether the daily map should go out now. Pure, so a test can ask
+        without waiting for a clock.
+
+        Due once per calendar day (UTC), at or after `map_hour`. Sending only
+        after the hour keeps it a morning map rather than a midnight one, and
+        the date guard keeps a restart from re-sending a map already delivered.
+        """
+        now = now or dt.datetime.now(dt.UTC)
+        if now.hour < self.settings.map_hour:
+            return False
+        return self.last_map_date != now.date().isoformat()
+
+    def _send_map(self, now: dt.datetime | None = None) -> dict:
+        """Compute and send the daily map. One message a day, by design: the map
+        is context, and context repeated is noise."""
+        try:
+            from .actions import Actions
+            text = Actions(self.settings, self.orchestrator).map()
+            ok = self.notifier.send(text)
+            now = now or dt.datetime.now(dt.UTC)
+            # Mark the day sent only on success, so a failed send is retried on
+            # the next tick rather than lost until tomorrow.
+            if ok:
+                self.last_map_date = now.date().isoformat()
+                self.maps += 1
+                self.alerts.append(f"map:{now.date().isoformat()}")
+                self.alerts = self.alerts[-KEEP:]
+            return {"sent": ok, "date": now.date().isoformat()}
+        except Exception as exc:  # noqa: BLE001 - a failed map must not stop the desk
+            self._note_error("map", exc)
+            return {"error": exc.__class__.__name__}
+
     def _read(self) -> dict:
         try:
             out = self.orchestrator.watch_once(notifier=self.notifier)
@@ -255,6 +293,11 @@ class Daemon:
             elif job == "read":
                 self.last_read = now
                 out["read"] = self._read()
+        # The daily map is a wall-clock job, not a cadence one: it fires once a
+        # day at `map_hour`, and only while the market is open (a map of a
+        # frozen tape is not a plan for the day).
+        if self._map_due():
+            out["map"] = self._send_map()
         return out
 
     # ---- the loop --------------------------------------------------------

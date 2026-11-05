@@ -40,6 +40,10 @@ on:
         description: "Send the conditional scenarios to the chat"
         type: boolean
         default: false
+      send_map:
+        description: "Send the daily map (buy/sell zones, liquidity, trend)"
+        type: boolean
+        default: false
       send_analysis:
         description: "Run a full analysis and send it to the chat"
         type: boolean
@@ -181,6 +185,16 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python3 -m desk.cli scenarios --send
+
+      # The daily map on demand. The always-on daemon already sends it once a
+      # day; this is here so it can be seen or re-sent without waiting for the
+      # daemon's hour.
+      - name: Send the daily map
+        if: ${{ inputs.send_map }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 -m desk.cli map --send
 
       # The full read, on demand: every agent's study plus the final call. Sent
       # from CI because the real token lives in repo secrets, not in any shell

@@ -122,6 +122,12 @@ class Settings:
     # whose nearest target sits closer than the stop is a losing proposition even
     # when the direction is right.
     min_rr: float = float(os.environ.get("DESK_MIN_RR", "1.5"))
+    # The daily map is sent once a day at this UTC hour, once the market is
+    # open. 7 UTC is 09:00-10:00 in the owner's timezone (UTC+2/+3, the Levant),
+    # before the London session -- the map is a plan for the day, so it should
+    # arrive before the day's range is set, not after. Set DESK_MAP_HOUR to move
+    # it; a day already sent is not re-sent on a restart.
+    map_hour: int = int(os.environ.get("DESK_MAP_HOUR", "7"))
     # Stand down when the market is closed (the weekend, and Friday's close).
     # The schedule is 24/7 and does not know the market closes; without this the
     # desk reads a dead tape on a Saturday and spends the run for nothing. Set

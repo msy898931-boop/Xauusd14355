@@ -78,7 +78,7 @@ class Actions:
     # are plain text -- a study summary can contain `&` -- and are escaped as
     # one block, because a raw `&` makes Telegram reject the whole message.
     MARKUP_ACTIONS = ("recommend", "market", "plan", "levels", "help", "menu",
-                      "chart", "scenarios")
+                      "chart", "scenarios", "map")
 
     def __init__(self, settings: Settings, orchestrator=None):
         self.settings = settings
@@ -97,7 +97,8 @@ class Actions:
                 "اختر من الأزرار 👇\n"
                 "\n"
                 "📊 تحليل الآن · 🎯 التوصية\n"
-                "🎬 السيناريوهات · 📈 الخطة الكاملة\n"
+                "🎬 السيناريوهات · 🗺️ خريطة اليوم\n"
+                "📈 الخطة الكاملة\n"
                 "📉 الشارت · ⏱️ السوق\n"
                 "🔔 المستويات · 📚 دراسة الذهب\n"
                 "📋 آخر تقرير · 📈 معدل النجاح\n"
@@ -115,6 +116,7 @@ class Actions:
             "plan": self.plan,
             "levels": self.levels,
             "scenarios": self.scenarios,
+            "map": self.map,
             "gold": self.gold,
             "chart": self.chart,
             "help": self.help,
@@ -251,6 +253,24 @@ class Actions:
         else:
             lines.append("<i>ولا مستوى منكسر أو قريب — السعر بين المستويات.</i>")
         return "\n".join(lines)
+
+    def map(self) -> str:
+        """The daily map: buy zones, sell zones, liquidity, trend, the ground.
+
+        Read-only over what a run already stored -- closed frames from shared
+        memory and a live quote. No agent, no model, so pressing it is cheap.
+        The frames are passed in the shared-memory shape; `map.build` does the
+        reshaping, because only closed bars may be read.
+        """
+        from . import map as MP
+
+        quote, err = self._quote_or_none()
+        if not quote:
+            return f"🗺️ تعذّر قراءة السعر: {_e(err or 'لا توجد تسعيرة')}"
+        live = float(quote["mid"])
+        frames = {tf: self.shared.load_candles(self.settings.symbol, tf)
+                  for tf in MP.MAP_FRAMES}
+        return MP.render(MP.build(frames, live, symbol=self.settings.symbol))
 
     def scenarios(self) -> str:
         """Conditional scenarios from printed levels, ATR, and the calendar.
