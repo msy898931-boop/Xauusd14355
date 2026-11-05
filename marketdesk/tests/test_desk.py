@@ -1267,6 +1267,72 @@ def test_bias_audit_is_wired_to_the_cli():
     assert ns.func.__name__ == "cmd_bias"
 
 
+# ---- calibration ------------------------------------------------------
+
+def test_calibration_curve_reads_the_shipped_history():
+    """The curve must come from the desk's own rule on real bars, and its own
+    counts must add up."""
+    from desk import calibration as cal
+
+    c = cal.from_symbol("XAUUSD")
+    assert c.n > 1000
+    assert c.correct <= c.n
+    assert c.ece is not None
+    for b in c.bands:
+        assert b.correct <= b.n
+
+
+def test_calibration_exposes_the_desks_optimism():
+    """The headline finding: the desk's nominal confidence is far too high. The
+    curve must be able to see that, or it is not measuring anything."""
+    from desk import calibration as cal
+
+    c = cal.from_symbol("XAUUSD")
+    assert c.calibrated is False, "a 92% claim that lands 56% must fail"
+    assert (c.ece or 0.0) > cal.MAX_ECE_PCT / 100
+
+
+def test_calibration_of_a_perfect_forecaster_is_calibrated():
+    """A desk that is right exactly as often as it claims must pass. The check
+    has to be able to say yes as well as no."""
+    from desk import calibration as cal
+
+    rows = []
+    for i in range(400):
+        p = 0.7
+        rows.append({"correct": 1 if i < int(400 * p) else 0,
+                     "bias_score": 0.4, "move_pct": 1.0})
+    c = cal.from_outcomes(rows)
+    assert c.n == 400
+    assert c.calibrated is True
+
+
+def test_calibration_refuses_to_tune_on_a_thin_sample():
+    from desk import calibration as cal
+
+    c = cal.from_outcomes([{"correct": 1, "bias_score": 0.5, "move_pct": 1.0}])
+    assert c.n == 1
+    assert c.enough_to_tune is False
+
+
+def test_reliability_reports_the_measured_rate_not_the_nominal_one():
+    """`reliability` must return what the band actually delivered, and a sample
+    big enough to mean it -- never the nominal 0.5 + 0.5*score."""
+    from desk import calibration as cal
+
+    rel = cal.reliability("XAUUSD", 0.9)
+    assert rel is not None
+    real, n = rel
+    assert n >= 30
+    assert real < 0.9, "the desk's own 92% band must not come back as 92%"
+
+
+def test_calibration_is_wired_to_the_cli():
+    from desk.cli import build_parser
+    ns = build_parser().parse_args(["calibration"])
+    assert ns.func.__name__ == "cmd_calibration"
+
+
 # ---- measured correlation ---------------------------------------------
 
 def test_pearson_measures_real_comovement():

@@ -297,6 +297,26 @@ def cmd_bias(args) -> int:
     return 0
 
 
+def cmd_calibration(args) -> int:
+    """Show whether the desk's confidence means what it says.
+
+    Two curves: the ten-year replay of the desk's own rule (always available),
+    and the live graded runs when there are any.
+    """
+    from . import calibration as cal
+
+    symbol = args.symbol or "XAUUSD"
+    print(cal.render(cal.from_symbol(symbol)))
+    from .memory import SharedMemory
+
+    rows = SharedMemory(Settings().shared_db).load_outcomes()
+    live = cal.from_outcomes(rows)
+    if live.n:
+        print()
+        print(cal.render(live))
+    return 0
+
+
 def cmd_scan(args) -> int:
     """Ask the prior question: is there any edge in the data at all?
 
@@ -719,6 +739,11 @@ def build_parser() -> argparse.ArgumentParser:
     bs = sub.add_parser("bias", help="audit the desk's own rule for a structural lean")
     bs.add_argument("--symbol", default=None)
     bs.set_defaults(func=cmd_bias)
+
+    cl = sub.add_parser("calibration",
+                        help="is the desk's confidence calibrated against outcomes?")
+    cl.add_argument("--symbol", default=None)
+    cl.set_defaults(func=cmd_calibration)
 
     bt = sub.add_parser("backtest", help="grade the method on stored daily bars")
     bt.add_argument("--symbol", default=None)

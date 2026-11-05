@@ -57,6 +57,19 @@ def render(run: Run, lang: str = "ar") -> str:
     L.append("")
     L.append("— التوصية النهائية —")
     L.append(f"  الاتجاه: {ar.verdict(run.verdict)}  (نتيجة مرجّحة {run.score:+.2f})")
+    # The score is a lean, not a probability. Say what it actually delivered:
+    # measured over ten years a nominal 92% was right 55.6% of the time, and a
+    # trader who sizes on the nominal number is mis-sizing.
+    try:
+        from . import calibration as cal
+        rel = cal.reliability(run.symbol, run.score)
+    except Exception:
+        rel = None
+    if rel:
+        real, n = rel
+        nominal = 0.5 + 0.5 * min(1.0, abs(run.score))
+        L.append(f"  ثقة مُعايَرة: {real:.0%} فعلياً (على {n} حالة مشابهة) — "
+                 f"بينما الثقة الاسمية {nominal:.0%}")
     bias = r.get("bias") or {}
     if bias.get("direction"):
         L.append(f"  الميل الضمني: {ar.direction(bias['direction'])} ({bias.get('score'):+.3f})")
