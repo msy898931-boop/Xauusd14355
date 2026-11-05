@@ -23,7 +23,13 @@ from .config import base_currency
 # A level's stop is the ATR of the frame that printed it: a 1h shelf plays out
 # over hours, so a daily-ATR stop would be several times too wide. Frames are
 # tried finest-first so the nearest level usually comes from the finest frame.
-FRAMES = ("1h", "4h", "1d")
+#
+# The pool reaches down to 5m on purpose. A small account can only afford a
+# tight stop, and a tight stop only exists on a fine frame: the 1h ATR here is
+# ~20 points and the 4h ~37, both wider than a $200 account can risk. The 15m
+# and 30m frames carry the 10-15 point stops the owner asked for, so the desk
+# has to look at them or it can only ever say "this setup is too wide for you".
+FRAMES = ("5m", "15m", "30m", "1h", "4h", "1d")
 # Levels closer than this fraction of the frame's ATR are one shelf, not two.
 MERGE_ATR = 0.6
 # A level within this fraction of the frame's ATR of the live price is the price
@@ -66,14 +72,22 @@ def _frame_atr(bars: list[dict]) -> float | None:
     return ind.atr(c) if len(c) >= 20 else None
 
 
-def _candidates(bars_by_frame: dict[str, list[dict]], live: float) -> list[dict]:
+def _candidates(bars_by_frame: dict[str, list[dict]], live: float,
+                min_atr: float = 0.0, max_atr: float = 0.0) -> list[dict]:
     """Printed levels from every available frame, each carrying its own frame and
     that frame's ATR, deduplicated across frames and sorted by distance from the
     live price.
 
-    Pooling frames is the point: the nearest level above gold is usually a 1h
+    Pooling frames is the point: the nearest level above gold is usually a fine
     shelf, while a daily-only read puts the first resistance 120 points away and
     makes every scenario unusable.
+
+    When the trader gave a stop window (`min_atr`/`max_atr`), a level whose frame
+    ATR sits inside it is preferred over a nearer one whose stop the trader cannot
+    take. The stop is the frame's ATR, so this is how a $200 account gets a 10-15
+    point setup instead of a 5m level whose 6-point stop it would refuse anyway.
+    Ordering is still by distance *within* each group, so the nearest usable level
+    wins and the fallback (nothing in the window) is still the nearest level.
     """
     out: list[dict] = []
     for tf in FRAMES:
@@ -88,7 +102,17 @@ def _candidates(bars_by_frame: dict[str, list[dict]], live: float) -> list[dict]
             out.append({"price": float(price), "frame": tf, "atr": atr})
     if not out:
         return []
-    out.sort(key=lambda x: abs(x["price"] - live))
+
+    def in_window(c: dict) -> bool:
+        if min_atr and c["atr"] < min_atr:
+            return False
+        if max_atr and c["atr"] > max_atr:
+            return False
+        return True
+
+    windowed = bool(min_atr or max_atr)
+    out.sort(key=lambda x: (0 if (windowed and in_window(x)) else 1,
+                            abs(x["price"] - live)))
     kept: list[dict] = []
     for c in out:
         if abs(c["price"] - live) < MIN_DIST_ATR * c["atr"]:
@@ -134,7 +158,8 @@ def build(bars_by_frame: dict[str, list[dict]], live: float,
           now: dt.datetime | None = None, window_h: float = 6.0,
           symbol: str = "XAUUSD", balance: float = 0.0, risk_pct: float = 1.0,
           contract_size: float = 100.0, lot_step: float = 0.01,
-          spread: float = 0.25, max_stop_points: float = 0.0) -> dict:
+          spread: float = 0.25, min_stop_points: float = 0.0,
+          max_stop_points: float = 0.0) -> dict:
     """The scenario set: a breakout, a rejection, a deeper move, and the event.
 
     `bars_by_frame` is closed-bar frames (the agent `frames_data` shape). Frames
@@ -153,7 +178,7 @@ def build(bars_by_frame: dict[str, list[dict]], live: float,
         "symbol": symbol, "live": live, "structure": struct,
         "scenarios": [], "event": None, "note": None,
     }
-    cand = _candidates(frames, live)
+    cand = _candidates(frames, live, min_atr=min_stop_points, max_atr=max_stop_points)
     if not cand:
         out["note"] = "لا توجد مستويات مطبوعة كافية لبناء سيناريو."
         return out
@@ -185,7 +210,8 @@ def build(bars_by_frame: dict[str, list[dict]], live: float,
             sc["sizing"] = size_plan(
                 balance=balance, risk_pct=risk_pct, entry=level["price"],
                 stop=stop, target=target, contract_size=contract_size,
-                lot_step=lot_step, spread=spread, max_stop_points=max_stop_points)
+                lot_step=lot_step, spread=spread, min_stop_points=min_stop_points,
+                max_stop_points=max_stop_points)
         return sc
 
     if above:

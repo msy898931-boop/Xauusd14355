@@ -93,8 +93,12 @@ python3 -m ruff check .             # lint
     and scenario in money (`lots = risk_budget / (stop_distance × 100oz)`), **floors**
     the size to the broker lot step (never rounds up — rounding up silently
     over-risks), and refuses a setup it cannot size, printing the number that
-    proves why. `DESK_BALANCE`/`DESK_RISK_PCT`/`DESK_MAX_STOP_POINTS` configure it;
-    `desk account` shows it on demand; with no balance the desk prints levels only.
+    proves why. A stop outside the owner's tolerance window
+    (`DESK_MIN_STOP_POINTS`..`DESK_MAX_STOP_POINTS`, here 10-15 points) is refused
+    as `too_tight`/`too_wide` whatever the lot size, and `scenarios._candidates`
+    prefers the frame whose ATR lands inside the window (the 15m ATR here is ~10,
+    the 30m ~15) over a nearer level it would only refuse. `desk account` shows it
+    on demand; with no balance the desk prints levels only.
 
 ## Environment quirks
 - **Groq sits behind Cloudflare and rejects urllib's default User-Agent with

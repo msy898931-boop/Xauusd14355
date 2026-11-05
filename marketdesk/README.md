@@ -220,9 +220,12 @@ These are not style preferences; each one was a real defect found by measurement
    the size to the broker's lot step, because rounding 0.006 lots *up* to 0.01
    silently risks more than the budget. When the minimum lot over-risks anyway,
    the desk refuses the setup and prints the number that proves it rather than a
-   size that looks fine and is not. `desk account` shows it on demand;
-   `DESK_BALANCE`, `DESK_RISK_PCT`, and `DESK_MAX_STOP_POINTS` configure it; with
-   no balance the desk prints levels only, as before.
+   size that looks fine and is not. The owner's stop tolerance is a *window*
+   (`DESK_MIN_STOP_POINTS`/`DESK_MAX_STOP_POINTS`, here 10-15 points): a stop
+   outside it is refused whatever the money says, and the scenario builder
+   prefers the frame whose ATR lands inside the window over a nearer level it
+   would only refuse. `desk account` shows it on demand; with no balance the desk
+   prints levels only, as before.
 
 ## When the model is unavailable
 

@@ -115,6 +115,15 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # The owner's account and stop tolerance, so every alert is sized in
+          # money and only carries a stop he can actually take. 10-15 points at
+          # the 0.01 minimum lot is $10-$15 = 5-7.5% of $200; DESK_RISK_PCT is set
+          # to 7.5 so the top of his window is affordable. Change the balance here
+          # when the account changes.
+          DESK_BALANCE: "200"
+          DESK_RISK_PCT: "7.5"
+          DESK_MIN_STOP_POINTS: "10"
+          DESK_MAX_STOP_POINTS: "15"
         # One reading. Alerts only on an actionable signal above
         # DESK_ALERT_SCORE, and never the same one twice. It also grades every
         # past call that now has a horizon behind it, so the record grows without

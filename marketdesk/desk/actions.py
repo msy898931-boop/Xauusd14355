@@ -278,6 +278,7 @@ class Actions:
                      risk_pct=self.settings.risk_pct,
                      contract_size=self.settings.contract_size,
                      lot_step=self.settings.lot_step, spread=self.settings.spread,
+                     min_stop_points=self.settings.min_stop_points,
                      max_stop_points=self.settings.max_stop_points)
         return S.render(sc)
 

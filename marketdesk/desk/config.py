@@ -167,9 +167,12 @@ class Settings:
     # A typical gold spread in price points, for stating the cost of a trade.
     # An estimate, labelled as one; never an input to the size.
     spread: float = float(os.environ.get("DESK_SPREAD", "0.25"))
-    # The widest stop the owner will accept, in price points (0 = no cap). A stop
-    # the trader will not honour is not a stop: a setup beyond it is refused
-    # whatever the lot size, and the desk says so instead of sizing it anyway.
+    # The owner's stop tolerance, in price points (0 = no bound). A stop outside
+    # this window is refused whatever the lot size: a stop the trader will not
+    # honour is not a stop, and a stop inside the noise is not one either. On a
+    # small account the window also keeps the risk honest -- 15 points at the
+    # minimum lot is 7.5% of $200, so a wider stop is refused for that reason too.
+    min_stop_points: float = float(os.environ.get("DESK_MIN_STOP_POINTS", "0"))
     max_stop_points: float = float(os.environ.get("DESK_MAX_STOP_POINTS", "0"))
 
     @property

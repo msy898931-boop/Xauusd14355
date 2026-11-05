@@ -227,6 +227,7 @@ def sizing_line(plan: ActivePlan, settings) -> str | None:
                    entry=plan.entry, stop=plan.stop, target=plan.target,
                    contract_size=settings.contract_size,
                    lot_step=settings.lot_step, spread=settings.spread,
+                   min_stop_points=getattr(settings, "min_stop_points", 0.0),
                    max_stop_points=getattr(settings, "max_stop_points", 0.0))
     if not sz.feasible:
         return (f"  💵 الحساب ${settings.balance:,.0f}: 🚫 الوقف واسع — أصغر حجم "

@@ -4205,3 +4205,56 @@ def test_a_stop_wider_than_the_owners_cap_is_refused_outright():
     # With no cap, the same stop falls back to the money rule (min lot over-risks).
     uncapped = size_plan(balance=200, risk_pct=5, entry=4120, stop=4162.15)
     assert not uncapped.feasible and "سقفك" not in uncapped.note
+
+
+def test_a_stop_tighter_than_the_owners_floor_is_refused():
+    """The owner's window is 10-15 points. A 6-point stop is inside the noise and
+    is refused as 'too_tight', distinct from the money refusal, so the message
+    says the right thing."""
+    from desk.account import size_plan
+    tight = size_plan(balance=200, risk_pct=7.5, entry=4120, stop=4126,
+                      min_stop_points=10, max_stop_points=15)
+    assert not tight.feasible
+    assert tight.reason == "too_tight"
+    inside = size_plan(balance=200, risk_pct=7.5, entry=4120, stop=4131,
+                       min_stop_points=10, max_stop_points=15)
+    assert inside.feasible and inside.lots == 0.01
+    assert abs(inside.risk_money - 11.0) < 1e-9        # 11 pts * 0.01 * 100
+
+
+def test_a_level_from_the_frame_whose_stop_fits_the_window_is_preferred():
+    """The nearest printed level is usually a fine-frame shelf with a stop too
+    tight to take. When the trader gave a window, the desk must climb to a frame
+    whose ATR lands inside it rather than hand back the nearer unusable level."""
+    from desk import scenarios as S
+    def frame(n, amp, base):
+        return [{"o": base, "h": base + amp, "l": base - amp, "c": base,
+                 "open": False} for _ in range(n)]
+    live = 4000.0
+    # 5m: tiny ATR (~4), with a level 8 points above live (nearest, unusable)
+    fine = frame(60, 2, 4000.0)
+    fine[30]["h"] = 4008.0
+    # 30m: ATR ~12, with a level 14 points above live (usable, farther)
+    coarse = frame(60, 6, 4000.0)
+    coarse[20]["h"] = 4014.0
+    frames = {"5m": fine, "15m": [], "30m": coarse, "1h": [], "4h": [], "1d": []}
+    sc = S.build(frames, live, min_stop_points=10, max_stop_points=15,
+                 balance=200, risk_pct=7.5)
+    ups = [s for s in sc["scenarios"] if s["side"] == "long"]
+    assert ups, "expected a breakout scenario"
+    assert ups[0]["frame"] == "30m", ups[0]["frame"]
+    assert 10 <= ups[0]["risk"] <= 15
+    assert ups[0]["sizing"].feasible
+
+
+def test_the_stop_window_still_falls_back_when_nothing_fits():
+    """If no frame's ATR is inside the window the desk must still build a
+    scenario from the nearest level -- degraded, not empty -- so the reader is
+    told 'the nearest setup is too wide', not left with nothing."""
+    from desk import scenarios as S
+    bars = [{"o": 4000, "h": 4030, "l": 3970, "c": 4000, "open": False}
+            for _ in range(60)]
+    frames = {"5m": bars, "15m": bars, "30m": bars, "1h": bars, "4h": bars, "1d": bars}
+    sc = S.build(frames, 4000.0, min_stop_points=1, max_stop_points=2)
+    assert sc["scenarios"], "a scenario must still be produced"
+    assert all(s["risk"] > 2 for s in sc["scenarios"])   # outside the window

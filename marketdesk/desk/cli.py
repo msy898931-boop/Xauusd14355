@@ -408,6 +408,8 @@ def cmd_account(args) -> int:
         s.risk_pct = args.risk
     if args.max_stop is not None:
         s.max_stop_points = args.max_stop
+    if args.min_stop is not None:
+        s.min_stop_points = args.min_stop
     if not s.balance:
         print("ما في حساب محدد. مرّر --balance 200 (أو DESK_BALANCE=200).")
         return 2
@@ -416,7 +418,8 @@ def cmd_account(args) -> int:
         sz = size_plan(balance=s.balance, risk_pct=s.risk_pct, entry=args.entry,
                        stop=args.stop, target=args.target,
                        contract_size=s.contract_size, lot_step=s.lot_step,
-                       spread=s.spread, max_stop_points=s.max_stop_points)
+                       spread=s.spread, min_stop_points=s.min_stop_points,
+                       max_stop_points=s.max_stop_points)
         print(render(sz, s.symbol, args.direction or ""))
         return 0
 
@@ -427,7 +430,8 @@ def cmd_account(args) -> int:
     sz = size_plan(balance=s.balance, risk_pct=s.risk_pct, entry=plan.entry,
                    stop=plan.stop, target=plan.target,
                    contract_size=s.contract_size, lot_step=s.lot_step,
-                   spread=s.spread, max_stop_points=s.max_stop_points)
+                   spread=s.spread, min_stop_points=s.min_stop_points,
+                       max_stop_points=s.max_stop_points)
     print(render(sz, s.symbol, plan.direction))
     try:
         live = float(sources.fetch_quote(s.symbol)["mid"])
@@ -717,6 +721,8 @@ def main(argv=None) -> int:
     ac.add_argument("--stop", type=float, default=None)
     ac.add_argument("--target", type=float, default=None)
     ac.add_argument("--direction", default=None)
+    ac.add_argument("--min-stop", type=float, default=None,
+                    help="refuse a stop tighter than this, in points")
     ac.add_argument("--max-stop", type=float, default=None,
                     help="refuse a stop wider than this, in points")
     ac.set_defaults(func=cmd_account)
