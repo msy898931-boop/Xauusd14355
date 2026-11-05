@@ -186,17 +186,36 @@ def build(bars_by_frame: dict[str, list[dict]], live: float,
     above = [c for c in cand if c["price"] > live]
     below = [c for c in cand if c["price"] < live]
 
-    def scenario(kind, side, level, target_c, why) -> dict:
+    def scenario(kind, side, level, why) -> dict | None:
         atr = level["atr"]
         confirm = CONFIRM_ATR * atr
         if side == "long":
             stop, confirm_px = level["price"] - atr, level["price"] + confirm
-            target = target_c["price"] if target_c else level["price"] + 2 * atr
         else:
             stop, confirm_px = level["price"] + atr, level["price"] - confirm
-            target = target_c["price"] if target_c else level["price"] - 2 * atr
+        # The target must be the nearest level strictly BEYOND the trigger on the
+        # scenario's own side. Picking it from the pooled list by position was a
+        # bug once the list stopped being sorted by price: a breakout long was
+        # handed a target *below* its trigger (R:R computed from absolute values,
+        # so it looked positive). Derive it from the trigger, not the list order.
+        if side == "long":
+            beyond = [c for c in cand if c["price"] > level["price"]]
+        else:
+            beyond = [c for c in cand if c["price"] < level["price"]]
+        if beyond:
+            beyond.sort(key=lambda c: abs(c["price"] - level["price"]))
+            target = beyond[0]["price"]
+        else:
+            target = level["price"] + (2 * atr if side == "long" else -2 * atr)
         risk = abs(level["price"] - stop)
-        rr = abs(target - level["price"]) / risk if risk else None
+        reward = abs(target - level["price"])
+        rr = reward / risk if risk else None
+        # A breakout whose target sits behind its trigger is not a plan. Guard it
+        # here so no caller can emit one, whatever the candidate order was.
+        if side == "long" and target <= level["price"]:
+            return None
+        if side == "short" and target >= level["price"]:
+            return None
         sc = {
             "kind": kind, "side": side, "frame": level["frame"],
             "trigger": round(level["price"], 2), "confirm": round(confirm_px, 2),
@@ -214,18 +233,20 @@ def build(bars_by_frame: dict[str, list[dict]], live: float,
                 max_stop_points=max_stop_points)
         return sc
 
+    built = []
     if above:
-        out["scenarios"].append(scenario(
-            "breakout", "long", above[0], above[1] if len(above) > 1 else None,
+        built.append(scenario(
+            "breakout", "long", above[0],
             f"أقرب مقاومة مطبوعة ({above[0]['frame']})؛ إغلاق فوقها يؤكد الاختراق"))
     if below:
-        out["scenarios"].append(scenario(
-            "breakdown", "short", below[0], below[1] if len(below) > 1 else None,
+        built.append(scenario(
+            "breakdown", "short", below[0],
             f"أقرب دعم مطبوع ({below[0]['frame']})؛ إغلاق تحته يفعّل الهبوط"))
     if len(below) > 1:
-        out["scenarios"].append(scenario(
-            "deeper", "short", below[1], below[2] if len(below) > 2 else None,
+        built.append(scenario(
+            "deeper", "short", below[1],
             "كسر الدعم الثاني يفتح الطريق للمستوى الأبعد"))
+    out["scenarios"] = [s for s in built if s is not None]
 
     ev = _next_event(calendar or [], now, window_h, symbol)
     if ev:

@@ -4258,3 +4258,24 @@ def test_the_stop_window_still_falls_back_when_nothing_fits():
     sc = S.build(frames, 4000.0, min_stop_points=1, max_stop_points=2)
     assert sc["scenarios"], "a scenario must still be produced"
     assert all(s["risk"] > 2 for s in sc["scenarios"])   # outside the window
+
+
+def test_a_breakout_target_is_never_behind_its_trigger():
+    """The window-preference sort stopped the candidate list being ordered by
+    price, and the target picker read it by position -- so a breakout long got a
+    target *below* its trigger, with an R:R computed from absolute values that
+    looked healthy. Every scenario's target must lie beyond its trigger on the
+    scenario's own side, whichever order the levels came in."""
+    from desk import scenarios as S
+    bars = [{"o": 4000, "h": 4020, "l": 3980, "c": 4000, "open": False}
+            for _ in range(60)]
+    frames = {"5m": bars, "15m": bars, "30m": bars, "1h": bars, "4h": bars, "1d": bars}
+    sc = S.build(frames, 4000.0, balance=200, risk_pct=5)
+    for s in sc["scenarios"]:
+        trig = s["trigger"]
+        tgt = s["targets"][0]
+        if s["side"] == "long":
+            assert tgt > trig, f"long target {tgt} not above trigger {trig}"
+        else:
+            assert tgt < trig, f"short target {tgt} not below trigger {trig}"
+        assert s["rr"] and s["rr"] > 0
