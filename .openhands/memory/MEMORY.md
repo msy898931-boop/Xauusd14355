@@ -151,6 +151,14 @@ Detail for all of these lives in `MARKETDESK.md`; the daily log is `2026-11-02.m
 - **Two entry semantics, deliberately:** `scenarios.py` `entry` = a **breakout
   trigger**; `recommendation.entry` = **market entry at the current price**
   (`mid@issue == entry`). Fill logic must handle both or it hides losses.
+- ⭐ **A map is a view, not new math — and "manipulation" is not measurable.**
+  `desk/map.py` clusters `indicators.pivots` into ZONES (0.25% ≈ 1×15m ATR, min 2
+  touches), splits them by the live price into sell (above) / buy (below) zones,
+  and adds liquidity = repeated highs/lows (where stops sit). Supply/demand and
+  S/R are the SAME prices; do not sell them as two findings. Say "liquidity",
+  never "manipulation". The map carries no buy/sell instruction. Sent ONCE a day
+  by the daemon at `DESK_MAP_HOUR`, keyed on the calendar date, marked sent only
+  on success (a dead token retries, not loses the day).
 - ⭐ **An alert must carry the trade, not just the level.** `Level` has
   `call_side/stop/target/why`; a level clearing the desk's R:R floor (1.5) renders
   `🟢 اشترِ — stop, target, R:R, why`, else it stays a silent marker (never invent
