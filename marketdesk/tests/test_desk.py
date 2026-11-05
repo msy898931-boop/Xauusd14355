@@ -4466,3 +4466,38 @@ def test_daemon_map_job_runs_from_the_tick(tmp_path, monkeypatch):
     monkeypatch.setattr("desk.actions.Actions.map", lambda self: "خريطة")
     d.tick(0.0)
     assert sent == ["خريطة"]
+
+
+def test_daemon_map_stamp_survives_a_restart(tmp_path, monkeypatch):
+    """The host restarts the process on every deploy. An in-memory 'sent' date
+    would re-send the map each time -- so the stamp must live on disk, and a
+    fresh Daemon must read it back and stay quiet."""
+    import datetime as _dt
+
+    d, _ = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900)
+    d.settings.map_hour = 7
+    sent: list[str] = []
+    monkeypatch.setattr(d.notifier, "send", lambda t: sent.append(t) or True)
+    monkeypatch.setattr("desk.actions.Actions.map", lambda self: "خريطة")
+    day = _dt.datetime(2026, 11, 5, 8, 0, tzinfo=_dt.UTC)
+    d._send_map(day)
+    assert sent == ["خريطة"]
+
+    # A fresh process (a deploy) reads the stamp and does NOT re-send today.
+    from desk.daemon import Daemon
+    d2 = Daemon(_settings(tmp_path))
+    d2.settings.map_hour = 7
+    assert d2.last_map_date == "2026-11-05"
+    assert d2._map_due(day) is False
+    # ...but tomorrow it is owed again.
+    assert d2._map_due(day + _dt.timedelta(days=1)) is True
+
+
+def test_daemon_map_stamp_a_torn_file_is_not_a_missing_day(tmp_path, monkeypatch):
+    """A corrupt stamp must read as 'nothing sent' (one duplicate map at worst),
+    never crash the daemon on boot."""
+    d, _ = _daemon(tmp_path, monkeypatch, level_every=10, read_every=900)
+    (tmp_path / "map_sent.json").write_text("{not json")
+    from desk.daemon import Daemon
+    d2 = Daemon(_settings(tmp_path))
+    assert d2.last_map_date is None

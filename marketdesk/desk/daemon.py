@@ -48,6 +48,7 @@ import json
 import os
 import signal
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config import Settings
@@ -84,6 +85,35 @@ DEFAULT_PING_EVERY = 600.0
 KEEP = 50
 
 
+def _map_stamp_path(settings) -> Path:
+    return settings.home / "map_sent.json"
+
+
+def _load_map_date(settings) -> str | None:
+    """The date the last map went out, from disk. Missing or unreadable means
+    "nothing sent yet" -- a corrupt stamp costs one duplicate map, never a
+    missing one, which is the right way round for a message the owner wants."""
+    try:
+        return json.loads(Path(_map_stamp_path(settings)).read_text()).get("date")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _save_map_date(settings, date: str) -> None:
+    """Write the stamp atomically, so a crash mid-write cannot leave a torn file
+    that reads as 'nothing sent' and re-sends the map."""
+    p = Path(_map_stamp_path(settings))
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"date": date}))
+        tmp.replace(p)
+    except OSError:
+        # Best-effort: a failed write costs a duplicate map on the next restart,
+        # which is better than failing the send that already succeeded.
+        pass
+
+
 class Daemon:
     """One resident process: chat, levels, and readings, on three cadences."""
 
@@ -115,8 +145,10 @@ class Daemon:
         self.last_ping = float("-inf")
         # The daily map keys on the wall-clock date, not a monotonic interval:
         # "once a day" is a calendar fact, and a monotonic counter would drift
-        # across a restart or a clock step. None means "nothing sent yet".
-        self.last_map_date: str | None = None
+        # across a restart or a clock step. Read from disk, not just memory: the
+        # host restarts the process on every deploy, and an in-memory date would
+        # re-send the map each time. None means "nothing sent yet".
+        self.last_map_date: str | None = _load_map_date(settings)
         self.maps = 0
         self._stop = False
         self._was_open: bool | None = None
@@ -239,6 +271,7 @@ class Daemon:
             # the next tick rather than lost until tomorrow.
             if ok:
                 self.last_map_date = now.date().isoformat()
+                _save_map_date(self.settings, self.last_map_date)
                 self.maps += 1
                 self.alerts.append(f"map:{now.date().isoformat()}")
                 self.alerts = self.alerts[-KEEP:]
