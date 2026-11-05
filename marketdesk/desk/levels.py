@@ -239,8 +239,15 @@ def from_scenarios(settings, live: float, *, symbol: str | None = None) -> tuple
                  contract_size=settings.contract_size, lot_step=settings.lot_step,
                  spread=settings.spread,
                  min_stop_points=settings.min_stop_points,
-                 max_stop_points=settings.max_stop_points)
+                 max_stop_points=settings.max_stop_points,
+                 min_rr=settings.min_rr)
     labels = {"breakout": "اختراق صعود", "breakdown": "كسر هبوط", "deeper": "هبوط أعمق"}
+    # The regime, from the highest frame that printed a structure. A trade that
+    # fights it is a level to watch, not a trade to take: a short into a rising
+    # 4h is how this desk lost sixteen plans in a row. "range" vetoes nothing --
+    # with no trend there is nothing to be against.
+    htf = (sc.get("structure") or {}).get("4h") or (sc.get("structure") or {}).get("1h")
+    min_rr = float(getattr(settings, "min_rr", 1.5))
     out: list[Level] = []
     for item in sc.get("scenarios") or []:
         trigger = item.get("trigger")
@@ -252,19 +259,27 @@ def from_scenarios(settings, live: float, *, symbol: str | None = None) -> tuple
         stop = item.get("stop")
         tgt = (item.get("targets") or [None])[0]
         rr = item.get("rr")
-        # Only a scenario that pays its way gets a buy/sell instruction: a break
-        # with R:R under the desk's own floor is a level to watch, not a trade to
-        # take, and calling it a trade would be the alert inventing conviction.
-        actionable = rr is not None and rr >= 1.5
+        # Only a scenario that pays its way AND agrees with the regime gets a
+        # buy/sell instruction: a break under the desk's own R:R floor, or into
+        # the higher frame's trend, is a level to watch -- calling it a trade
+        # would be the alert inventing conviction.
+        side_ = item.get("side")
+        counter = (side_ == "long" and htf == "down") or (side_ == "short" and htf == "up")
+        actionable = rr is not None and rr >= min_rr and not counter
         why = (f"سيناريو {item.get('frame')} · تأكيد بإغلاق "
                f"{item.get('confirm')} · R:R {rr}")
+        if counter:
+            why += f" · عكس اتجاه {('4h' if sc.get('structure', {}).get('4h') else '1h')} — مراقبة فقط"
         out.append(Level(
             float(trigger), kind, side,
             f"سيناريو {item.get('frame')} · تأكيد {item.get('confirm')} · R:R {rr}",
             call_side=item.get("side") if actionable else "",
             stop=float(stop) if (actionable and stop is not None) else None,
             target=float(tgt) if (actionable and tgt is not None) else None,
-            why=why if actionable else ""))
+            # Keep the note on a vetoed level too: "why there is no call" is the
+            # useful half of the message, and blanking it would leave the reader
+            # unable to tell a counter-trend level from an unpaid one.
+            why=why if (actionable or counter) else ""))
     return tuple(out)
 
 

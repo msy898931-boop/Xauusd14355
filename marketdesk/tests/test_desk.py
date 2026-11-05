@@ -4548,3 +4548,83 @@ def test_cli_map_once_a_day_retries_after_a_failed_send(tmp_path, monkeypatch):
     assert cli.cmd_map(A()) == 1
     from desk.daemon import _load_map_date
     assert _load_map_date(s) is None      # not stamped: owed again
+
+
+
+def _regime_wave(n=220, period=40, amp=30.0, base=3000.0, drift=0.0):
+    """A wave with UNIQUE timestamps, in the internal frame shape `build` reads.
+
+    `_wave` reuses timestamps (`i % 24`), which is harmless for a test that only
+    reads a series but corrupts anything round-tripped through shared memory:
+    the store keys candles by (symbol, tf, open_time), so later bars overwrite
+    earlier ones and the series that comes back is not the one that went in.
+    """
+    import math
+    out = []
+    for i in range(n):
+        c = base + drift * i + amp * math.sin(2 * math.pi * i / period)
+        out.append({"openTime": f"2026-01-{1 + i // 240:02d}T{i // 60 % 24:02d}:"
+                                f"{i % 60:02d}:00Z",
+                    "open": c - 1, "high": c + 2, "low": c - 2, "close": c,
+                    "tickVolume": 100 + i, "isOpen": False})
+    return out
+
+
+def _regime_frames(drift, tfs=("5m", "15m", "30m", "1h", "4h", "1d")):
+    """The internal (t/o/h/l/c) shape `scenarios.build` reads, from one wave."""
+    raw = _regime_wave(drift=drift)
+    return {tf: [{"t": b["openTime"], "o": b["open"], "h": b["high"],
+                  "l": b["low"], "c": b["close"], "open": False} for b in raw]
+            for tf in tfs}
+
+
+def test_every_scenario_clears_the_rr_floor_and_both_sides_are_offered():
+    """The target must be the nearest level that PAYS for the stop, on both sides.
+
+    This is the fix for the desk's short bias. The nearest printed level sat
+    nearer than the frame's own ATR, so the first scenario out was under the R:R
+    floor almost every time. Only the second level out cleared it, and a second
+    level was only ever built for the short side (`deeper`) -- so the one plan
+    that survived was a short. Measured before the fix, live gold: breakout long
+    R:R 0.67, breakdown short 0.79, deeper short 1.79.
+    """
+    from desk import scenarios as S
+
+    frames = _regime_frames(3.0)
+    live = frames["1h"][-1]["c"]
+    sc = S.build(frames, live, calendar=[], min_rr=1.5)
+
+    assert sc["scenarios"], "a drifting wave must print scenarios"
+    for s in sc["scenarios"]:
+        assert s["rr"] is not None and s["rr"] >= 1.5, (
+            f"{s['kind']} {s['side']} pays only {s['rr']}")
+    assert {s["side"] for s in sc["scenarios"]} == {"long", "short"}, (
+        "the scenario set must not be one-sided")
+
+
+def test_from_scenarios_vetoes_a_trade_against_the_higher_frame_trend(tmp_path):
+    """A trade that fights the higher frame is a level to watch, not a trade.
+
+    Sixteen plans in a row went short into a rising market. The veto is the
+    guard against repeating it: a counter-trend scenario keeps its trigger and
+    its place in the alert set, but loses its buy/sell call, so the desk can no
+    longer hand anyone a trade that fights the regime.
+    """
+    from desk.levels import from_scenarios
+
+    for drift, counter_side in ((3.0, "below"), (-3.0, "above")):
+        s = _settings(tmp_path)
+        shared = SharedMemory(s.shared_db)
+        bars = _regime_wave(drift=drift)
+        for tf in s.timeframes:
+            shared.save_candles(s.symbol, tf, bars)
+        live = bars[-1]["close"]
+        lv = from_scenarios(s, live)
+
+        counter = [x for x in lv if x.side == counter_side]
+        assert counter, "the counter-trend level must still be watched"
+        for level in counter:
+            assert not level.call_side, (
+                f"a trade against the {drift:+.0f} regime must not be actionable: {level.why}")
+            assert "عكس اتجاه" in level.why, (
+                "the veto must say why it withheld the call")

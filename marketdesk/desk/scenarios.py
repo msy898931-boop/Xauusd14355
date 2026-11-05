@@ -159,7 +159,7 @@ def build(bars_by_frame: dict[str, list[dict]], live: float,
           symbol: str = "XAUUSD", balance: float = 0.0, risk_pct: float = 1.0,
           contract_size: float = 100.0, lot_step: float = 0.01,
           spread: float = 0.25, min_stop_points: float = 0.0,
-          max_stop_points: float = 0.0) -> dict:
+          max_stop_points: float = 0.0, min_rr: float = 1.5) -> dict:
     """The scenario set: a breakout, a rejection, a deeper move, and the event.
 
     `bars_by_frame` is closed-bar frames (the agent `frames_data` shape). Frames
@@ -198,16 +198,28 @@ def build(bars_by_frame: dict[str, list[dict]], live: float,
         # bug once the list stopped being sorted by price: a breakout long was
         # handed a target *below* its trigger (R:R computed from absolute values,
         # so it looked positive). Derive it from the trigger, not the list order.
+        risk = abs(level["price"] - stop)
         if side == "long":
             beyond = [c for c in cand if c["price"] > level["price"]]
         else:
             beyond = [c for c in cand if c["price"] < level["price"]]
         if beyond:
             beyond.sort(key=lambda c: abs(c["price"] - level["price"]))
-            target = beyond[0]["price"]
+            # Aim at the nearest level that actually pays for the stop, not
+            # simply the nearest level. On a fine frame the printed pivots sit
+            # closer together than that frame's ATR, so the nearest target was
+            # NEARER than the stop and the first scenario out was under the
+            # desk's own R:R floor almost every time. Only the second level out
+            # cleared it -- and a second level was only ever built for the short
+            # side (`deeper`), so the one plan that survived was a short. That
+            # asymmetry, not the market, is what made the desk short-biased.
+            # Walking outward is the same rule `plan` already applies, and it
+            # is applied to both sides alike.
+            paying = [c for c in beyond
+                      if abs(c["price"] - level["price"]) >= min_rr * risk]
+            target = (paying[0] if paying else beyond[0])["price"]
         else:
             target = level["price"] + (2 * atr if side == "long" else -2 * atr)
-        risk = abs(level["price"] - stop)
         reward = abs(target - level["price"])
         rr = reward / risk if risk else None
         # A breakout whose target sits behind its trigger is not a plan. Guard it

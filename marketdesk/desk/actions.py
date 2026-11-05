@@ -299,7 +299,8 @@ class Actions:
                      contract_size=self.settings.contract_size,
                      lot_step=self.settings.lot_step, spread=self.settings.spread,
                      min_stop_points=self.settings.min_stop_points,
-                     max_stop_points=self.settings.max_stop_points)
+                     max_stop_points=self.settings.max_stop_points,
+                     min_rr=self.settings.min_rr)
         return S.render(sc)
 
     def gold(self) -> str:
