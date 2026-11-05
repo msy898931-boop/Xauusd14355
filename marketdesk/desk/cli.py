@@ -317,6 +317,19 @@ def cmd_calibration(args) -> int:
     return 0
 
 
+def cmd_walkforward(args) -> int:
+    """Walk the desk's rule forward through unseen windows.
+
+    Reports the train/test decay, the controls on the SAME windows, and the
+    paired difference against always-long -- the only number that says whether
+    the timing added anything over the market's drift.
+    """
+    from .walkforward import run_walkforward
+
+    print(run_walkforward(args.symbol or "XAUUSD", folds=args.folds))
+    return 0
+
+
 def cmd_scan(args) -> int:
     """Ask the prior question: is there any edge in the data at all?
 
@@ -744,6 +757,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="is the desk's confidence calibrated against outcomes?")
     cl.add_argument("--symbol", default=None)
     cl.set_defaults(func=cmd_calibration)
+
+    wf = sub.add_parser("walkforward",
+                        help="does the desk survive a window it has never seen?")
+    wf.add_argument("--symbol", default=None)
+    wf.add_argument("--folds", type=int, default=4)
+    wf.set_defaults(func=cmd_walkforward)
 
     bt = sub.add_parser("backtest", help="grade the method on stored daily bars")
     bt.add_argument("--symbol", default=None)

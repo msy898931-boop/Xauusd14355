@@ -1333,6 +1333,85 @@ def test_calibration_is_wired_to_the_cli():
     assert ns.func.__name__ == "cmd_calibration"
 
 
+# ---- walk-forward -----------------------------------------------------
+
+def test_walkforward_has_no_lookahead():
+    """The property the whole module rests on: appending bars must not change any
+    earlier decision."""
+    from desk import history
+    from desk import walkforward as wf
+
+    C = history.shaped("XAUUSD")
+    assert wf.lookahead_check(C) is True
+
+
+def test_walkforward_folds_are_consecutive_and_unseen():
+    """Each fold trains on a window and tests on the one after it -- no shuffle,
+    and train and test never overlap."""
+    from desk import history
+    from desk import walkforward as wf
+
+    C = history.shaped("XAUUSD")
+    w = wf.walk_forward(C, folds=4)
+    assert len(w.folds) == 4
+    for f in w.folds:
+        assert f.train[1] <= f.test[0]
+        assert f.test[1] > f.test[0]
+
+
+def test_walkforward_controls_use_the_same_windows_as_the_desk():
+    """A control graded over the whole file is not a fair comparison. The control
+    sample must come from the desk's own test windows."""
+    from desk import history
+    from desk import walkforward as wf
+
+    C = history.shaped("XAUUSD")
+    w = wf.walk_forward(C, folds=3)
+    windows = [f.test for f in w.folds]
+    ctrl = wf.controls(C, windows=windows)
+    desk_n = sum(f.test_n for f in w.folds)
+    # the controls grade every bar in those windows, so they must be at least as
+    # many as the desk's calls
+    assert ctrl["always long"][0] >= desk_n
+
+
+def test_walkforward_paired_test_is_the_honest_one():
+    """The paired difference against always-long must remove the market drift.
+    On gold's drift, the desk's timing must NOT show a significant edge -- if this
+    ever flips to significant, the desk has earned a real claim."""
+    from desk import history
+    from desk import walkforward as wf
+
+    C = history.shaped("XAUUSD")
+    w = wf.walk_forward(C, folds=4)
+    windows = [f.test for f in w.folds]
+    n, mean, t = wf.paired_vs_long(C, windows)
+    assert n > 500
+    assert abs(mean) < 0.2
+    assert abs(t) < 3.0, "the desk must not claim a timing edge it does not have"
+
+
+def test_walkforward_says_no_edge_out_loud():
+    """The verdict line must be honest when the desk does not beat holding."""
+    from desk import history
+    from desk import walkforward as wf
+
+    C = history.shaped("XAUUSD")
+    w = wf.walk_forward(C, folds=4)
+    windows = [f.test for f in w.folds]
+    text = wf.render(w, wf.controls(C, windows=windows),
+                     paired=wf.paired_vs_long(C, windows))
+    assert "edge توقيت" in text
+    assert "بصراحة" in text or "معنوي" in text
+
+
+def test_walkforward_is_wired_to_the_cli():
+    from desk.cli import build_parser
+    ns = build_parser().parse_args(["walkforward", "--folds", "3"])
+    assert ns.func.__name__ == "cmd_walkforward"
+    assert ns.folds == 3
+
+
 # ---- measured correlation ---------------------------------------------
 
 def test_pearson_measures_real_comovement():
