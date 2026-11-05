@@ -102,8 +102,8 @@ class CorrelationAgent(Agent):
                 rhos[sym] = rho
 
         # The dollar is the usual driver of gold, so the sign of the USDJPY
-        # relationship sets the direction; the size is the measured correlation.
-        usdjpy_rho = rhos.get("USDJPY")
+        # relationship is still reported as context; the *score*, however, is
+        # driven by whichever peer actually co-moves (measured below).
         usdjpy_chg = (peers.get("USDJPY") or {}).get("day_diff_pct")
         macro = "unclear"
         if own_chg is not None and usdjpy_chg is not None:
@@ -115,15 +115,24 @@ class CorrelationAgent(Agent):
                 macro = "mixed"
 
         score = 0.0
-        # driver_rho is a measured float or None; the score is scaled by it, so a
-        # peer that has never tracked gold contributes nothing rather than a fixed
-        # award for "the directions differed".
-        driver_rho = abs(usdjpy_rho) if usdjpy_rho is not None else None
-        if usdjpy_rho is not None and driver_rho is not None and driver_rho >= _RHO_FLOOR:
-            if macro == "gold-led (weak dollar)":
-                score = min(1.0, max(0.0, -usdjpy_rho))
-            elif macro == "dollar-led (gold pressured)":
-                score = -min(1.0, max(0.0, -usdjpy_rho))
+        # The driver is chosen by MEASURED co-movement, not assumed. It used to
+        # be hardcoded to USDJPY, which on this feed correlates with gold at
+        # rho ~ 0.00 -- so the agent's only scored branch never fired and it
+        # published "neutral" on all 69 runs. The strongest peer above the noise
+        # floor leads; its sign decides the direction and its |rho| the size.
+        driver_sym = None
+        driver_rho = None
+        for sym, rho in sorted(rhos.items(), key=lambda kv: -abs(kv[1])):
+            if abs(rho) >= _RHO_FLOOR:
+                driver_sym, driver_rho = sym, rho
+                break
+        if driver_sym is not None and driver_rho is not None:
+            peer_chg = (peers.get(driver_sym) or {}).get("day_diff_pct")
+            if isinstance(peer_chg, (int, float)) and peer_chg != 0:
+                # gold moves WITH a positive-rho peer and AGAINST a negative one
+                direction = 1.0 if peer_chg > 0 else -1.0
+                sign = 1.0 if driver_rho > 0 else -1.0
+                score = max(-1.0, min(1.0, direction * sign * abs(driver_rho)))
 
         adv, dec = breadth.get("advancers"), breadth.get("decliners")
         tone = "neutral"
@@ -131,17 +140,19 @@ class CorrelationAgent(Agent):
             tone = "risk-on" if adv > dec * 1.2 else ("risk-off" if dec > adv * 1.2 else "mixed")
 
         stance = self.stance_of(score)
-        conf = 0.5 if driver_rho is None else min(1.0, 0.3 + driver_rho)
+        conf = 0.5 if driver_rho is None else min(1.0, 0.3 + abs(driver_rho))
         peers_txt = "، ".join(
             f"{k} {_pct(v.get('day_diff_pct'))}" for k, v in peers.items()) or "—"
-        facts = (f"الذهب اليوم {_pct(own_chg)}؛ ارتباط الساعة المقيس مع USDJPY "
-                 f"{round(usdjpy_rho, 3) if usdjpy_rho is not None else 'غير قابل للقياس'}؛ "
+        driver_txt = (f"{driver_sym} (rho={round(driver_rho, 3)})"
+                      if driver_sym is not None and driver_rho is not None
+                      else "لا محرّك فوق حد الضجيج")
+        facts = (f"الذهب اليوم {_pct(own_chg)}؛ المحرّك المقيس {driver_txt}؛ "
                  f"الأقران {peers_txt}؛ "
-                 f"المحرّك {ar.t(macro, ar.DRIVER)}؛ الاتساع صاعد {_n(adv)} / "
-                 f"هابط {_n(dec)} ({ar.t(tone, ar.TONE)})")
+                 f"الاتساع صاعد {_n(adv)} / هابط {_n(dec)} ({ar.t(tone, ar.TONE)})")
         note = self.narrate(facts, "لخّص سياق الأسواق المقابلة للذهب.") or (
-            f"قراءة الأسواق المقابلة: {ar.t(macro, ar.DRIVER)}؛ "
+            f"قراءة الأسواق المقابلة: المحرّك {driver_txt}؛ "
             f"اللوح {ar.t(tone, ar.TONE)}. {facts}")
         return Study(self.name, self.kind, stance, conf, score, note,
-                     {"peers": peers, "driver": macro, "breadth": breadth, "tone": tone,
+                     {"peers": peers, "driver": driver_sym, "driver_rho": driver_rho,
+                      "macro": macro, "breadth": breadth, "tone": tone,
                       "correlations": rhos})

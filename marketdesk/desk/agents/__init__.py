@@ -1,6 +1,7 @@
 """The specialist agents. Each has one craft, its own private memory, and posts
 a study to the shared blackboard. The orchestrator is the central manager."""
 
+from .analog import AnalogAgent
 from .base import Agent, Study
 from .correlation import CorrelationAgent
 from .levels import LevelsAgent
@@ -14,6 +15,7 @@ from .volatility import VolatilityAgent
 
 # The roster, in display order. Adding an agent is one line here.
 ROSTER: list[type[Agent]] = [
+    AnalogAgent,
     StructureAgent,
     TrendAgent,
     MomentumAgent,
@@ -25,6 +27,6 @@ ROSTER: list[type[Agent]] = [
     RiskAgent,
 ]
 
-__all__ = ["Agent", "Study", "ROSTER", "StructureAgent", "TrendAgent",
+__all__ = ["Agent", "Study", "ROSTER", "AnalogAgent", "StructureAgent", "TrendAgent",
            "MomentumAgent", "LevelsAgent", "VolatilityAgent", "NewsAgent",
            "SurpriseAgent", "CorrelationAgent", "RiskAgent"]

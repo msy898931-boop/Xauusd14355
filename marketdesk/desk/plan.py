@@ -7,14 +7,10 @@ built only from the signal the scan found evidence for -- a break of the prior
 20-day range -- and it is graded by the same rules as the backtest: enter at the
 close, stop 1.5xATR, scale out in thirds at 1R / 2R / 3R.
 
-Two things keep it honest, and both are printed, not buried:
-
-* Every side carries the sample evidence that supports it. In this data the long
-  side is supported and the short side is noise, and the plan says so rather than
-  presenting two equally-weighted options.
-* The trigger is checked against the control. The bracket's entry added +0.015R
-  over always-long (t=0.14), so the plan states plainly that the long side's
-  profit is the market's drift, not a proven edge in the trigger.
+The evidence attached to each side is *measured now* (see `evidence.py`), not a
+constant. It used to be a hardcoded table that read like a result and never
+changed; it now recomputes the side's n, hit rate, expectancy and t against the
+constant-direction control, so a side with no edge is labelled as such.
 
 Nothing here is a promise. It is a conditional plan with its evidence attached.
 """
@@ -23,15 +19,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from . import evidence as ev
 from . import indicators as ind
 
-LOOKBACK = 20          # the prior-range window the scan found evidence for
-STOP_K = 1.5           # stop at 1.5 x ATR
+LOOKBACK = ev.LOOKBACK   # the prior-range window the scan found evidence for
+STOP_K = ev.STOP_K       # stop at 1.5 x ATR
 LADDER = (1.0, 2.0, 3.0)
-SIDE_EVIDENCE = {
-    "long": {"n": 47, "hit": 0.660, "mean_r": 0.915, "t": 4.80, "supported": True},
-    "short": {"n": 16, "hit": 0.375, "mean_r": -0.026, "t": -0.10, "supported": False},
-}
 RUNG_REACH = {1.0: 0.683, 2.0: 0.540, 3.0: 0.413}   # reached before the stop
 
 
@@ -70,14 +63,21 @@ def build_plan(bars: list[dict], live: float) -> dict:
     hi = max(b["high"] for b in window)
     lo = min(b["low"] for b in window)
 
+    # Measured, not stored: the same bracket this plan prints, graded on every
+    # historical day of the shipped sample, against the constant direction.
+    measured = ev.measure(C)
+    long_ev = measured.long.as_dict()
+    short_ev = measured.short.as_dict()
+
     long_side = Side("long", hi, hi, hi - risk, risk,
-                     [hi + m * risk for m in LADDER], SIDE_EVIDENCE["long"])
+                     [hi + m * risk for m in LADDER], long_ev)
     short_side = Side("short", lo, lo, lo + risk, risk,
-                      [lo - m * risk for m in LADDER], SIDE_EVIDENCE["short"])
+                      [lo - m * risk for m in LADDER], short_ev)
     closes = [b["c"] for b in C]
     return {
         "live": live,
         "last_closed": closed[-1],
+        "evidence_base": measured.base(),
         "closed_count": len(closed),
         "atr": atr,
         "risk": risk,
@@ -108,10 +108,11 @@ def _side_lines(s: Side) -> list[str]:
         reach = RUNG_REACH.get(m)
         extra = f"   reached {reach:.0%} of the time" if reach else ""
         out.append(f"    target{i} {t:,.2f}   ({m:.0f}R, {m*s.risk:,.2f} pts){extra}")
-    ev = s.evidence
-    verdict = "SUPPORTED" if ev["supported"] else "NOT SUPPORTED — reduce size"
-    out.append(f"    evidence  n={ev['n']} hit={ev['hit']:.1%} "
-               f"meanR={ev['mean_r']:+.3f} t={ev['t']:+.2f}  -> {verdict}")
+    ev_d = s.evidence
+    verdict = "مدعوم" if ev_d.get("supported") else "غير مدعوم — لا تعتمد عليه"
+    out.append(f"    الدليل     n={ev_d['n']} إصابة={ev_d['hit']:.1%} "
+               f"توقع={ev_d['mean_r']:+.3f}R خطأ={ev_d['base_r']:+.3f}R "
+               f"ميزة={ev_d['edge']:+.3f}R t={ev_d['t']:+.2f}  -> {verdict}")
     return out
 
 
@@ -141,9 +142,22 @@ def format_plan(p: dict, symbol: str = "XAUUSD") -> str:
     L.append("")
     L.append("-" * 74)
     L.append("  management: scale 1/3 at each rung; move the stop to entry after 1R.")
-    L.append("  the two sides are NOT equally supported. the long side is backed by")
-    L.append("  the sample; the short side is noise. trade the long side first.")
-    L.append("  the trigger adds +0.015R over always-long (t=0.14): the long side's")
-    L.append("  profit is the market's drift, not a proven edge in the trigger.")
-    L.append("  one sample, one market, ~20 months. not a promise.")
+    long_ok = p["long"].evidence.get("supported")
+    short_ok = p["short"].evidence.get("supported")
+    if long_ok and not short_ok:
+        L.append("  the two sides are NOT equally supported: the long side clears the")
+        L.append("  evidence bar, the short side does not. trade the supported side.")
+    elif short_ok and not long_ok:
+        L.append("  the two sides are NOT equally supported: the short side clears the")
+        L.append("  evidence bar, the long side does not. trade the supported side.")
+    elif not long_ok and not short_ok:
+        L.append("  NEITHER side clears the evidence bar on this sample. the plan is")
+        L.append("  a map of where the range breaks, not a trade to take blind.")
+    else:
+        L.append("  both sides clear the evidence bar; size by the weaker one.")
+    base = p.get("evidence_base") or {}
+    if base:
+        L.append(f"  control: always-long {base.get('long_r', 0):+.3f}R, "
+                 f"always-short {base.get('short_r', 0):+.3f}R over the same bars.")
+    L.append("  one sample, one market, ~10 years. not a promise.")
     return "\n".join(L)

@@ -153,6 +153,33 @@ def _next_event(cal: list[dict], now: dt.datetime, window_h: float,
     return {"hours": round(best[0], 1), "time": best[1].isoformat(), "row": best[2]}
 
 
+def _probability(side: str, *, symbol: str = "XAUUSD") -> dict | None:
+    """The measured frequency of this side's bracket in the CURRENT market state.
+
+    Probability here is not a model's opinion; it is the hit rate of exactly this
+    bracket (stop 1.5xATR, target 2R, 20 bars) on every past day the market was in
+    the same coarse state. It returns None when the state's sample is too thin,
+    and the caller then prints no probability rather than a made-up one -- a
+    "60%" from five samples is a lie with a decimal point.
+    """
+    from . import history
+    from . import state as state_mod
+    from .agents.analog import MIN_N, measure_cached
+
+    C = history.shaped(symbol)
+    if len(C) < state_mod.TREND_MA + 40:
+        return None
+    cur = state_mod.state_at(C, len(C) - 1)
+    if cur is None:
+        return None
+    m = measure_cached(C, cur.key())
+    s = m.get(side) or {}
+    if s.get("n", 0) < MIN_N:
+        return None
+    return {"p": s["hit"], "n": s["n"], "n_state": m["n_state"],
+            "mean_r": s["mean_r"], "t": s["t"], "state": cur.label_ar()}
+
+
 def build(bars_by_frame: dict[str, list[dict]], live: float,
           calendar: list[dict] | None = None, *,
           now: dt.datetime | None = None, window_h: float = 6.0,
@@ -234,6 +261,14 @@ def build(bars_by_frame: dict[str, list[dict]], live: float,
             "stop": round(stop, 2), "targets": [round(target, 2)],
             "risk": round(risk, 2), "rr": round(rr, 2) if rr else None,
             "why": why,
+            # Invalidation: the price at which the scenario's *thesis* is simply
+            # wrong -- the break failed back through its own trigger. Distinct
+            # from the stop (a money level); this is a thesis level, and it sits
+            # nearer than the stop so it fires first. Printed, so a scenario is a
+            # falsifiable claim and not a wish.
+            "invalidation": round(
+                level["price"] - confirm if side == "long"
+                else level["price"] + confirm, 2),
         }
         # Size the scenario in money, for the account the caller named. Kept in
         # points when no balance is set, so the desk still works keyless.
@@ -259,6 +294,17 @@ def build(bars_by_frame: dict[str, list[dict]], live: float,
             "deeper", "short", below[1],
             "كسر الدعم الثاني يفتح الطريق للمستوى الأبعد"))
     out["scenarios"] = [s for s in built if s is not None]
+
+    # Attach the measured probability of each side's bracket in the CURRENT
+    # state. Same measurement for both sides, so the two are comparable; a side
+    # whose sample is thin gets no number at all.
+    probs: dict[str, dict | None] = {}
+    for side in ("long", "short"):
+        probs[side] = _probability(side, symbol=symbol)
+    for sc in out["scenarios"]:
+        sc["probability"] = probs.get(sc["side"])
+    out["probability_state"] = next(
+        (p["state"] for p in probs.values() if p), None)
 
     ev = _next_event(calendar or [], now, window_h, symbol)
     if ev:
@@ -306,6 +352,13 @@ def render(sc: dict) -> str:
         rr = f" · R:R {s['rr']}" if s.get("rr") else ""
         L.append(f"      الوقف {s['stop']:,.2f} ({s['risk']:,.0f} نقطة){rr} · الهدف "
                  + "، ".join(f"{t:,.2f}" for t in s["targets"]))
+        prob = s.get("probability")
+        if prob:
+            L.append(f"      🎲 احتمال الوصول (مقاس): <b>{prob['p']:.0%}</b> "
+                     f"من {prob['n']} حالة مشابهة · توقع {prob['mean_r']:+.2f}R")
+        if s.get("invalidation") is not None:
+            L.append(f"      ❌ يُبطَل عند <b>{s['invalidation']:,.2f}</b> "
+                     f"(فشل الاختراق ورجوعه)")
         sz = s.get("sizing")
         if sz is not None:
             if sz.feasible:

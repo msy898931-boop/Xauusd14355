@@ -42,7 +42,7 @@ LATIN_OK = {
     "rsi", "macd", "atr", "ema", "sma", "bos", "choch", "fib", "fibs",
     "usd", "usdjpy", "eurusd", "xauusd", "xagusd", "btcusd", "usoil", "dxy",
     "spx", "jolts", "cpi", "nfp", "fomc", "gdp", "pmi", "ecb", "fed", "boj",
-    "mm", "bn", "api", "llm", "usd/jpy", "r/r", "r:r",
+    "mm", "bn", "api", "llm", "usd/jpy", "r/r", "r:r", "rho", "ma", "adx",
 }
 
 

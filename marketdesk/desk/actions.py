@@ -340,8 +340,31 @@ class Actions:
             lines.append(f"الأهداف: {tg}")
         if rec.get("levels_note"):
             lines.append(f"ملاحظة: {_e(rec['levels_note'])}")
+        ev_line = self._evidence_line()
+        if ev_line:
+            lines.append(ev_line)
         lines.append("(للقراءة الحيّة اضغط «📊 تحليل الآن»)")
         return "\n".join(lines)
+
+    def _evidence_line(self) -> str:
+        """The measured record of the setup, from the shipped 10-year file.
+
+        The plan card prints this; the recommendation card used to print nothing
+        about a track record, so the two paths disagreed. Same measurement, same
+        source, both cards. Silence (not a claim) when the file is missing.
+        """
+        csv = self._long_csv()
+        if csv is None:
+            return ""
+        try:
+            from .backtest import load_daily
+            from .evidence import measure, summary_line
+            bars = load_daily(csv)
+            C = [{"o": b["open"], "h": b["high"], "l": b["low"], "c": b["close"]}
+                 for b in bars if not b.get("isOpen")]
+            return summary_line(measure(C))
+        except Exception:  # noqa: BLE001 - a missing record must not break the card
+            return ""
 
     def report(self) -> str:
         row = self._last_run()

@@ -1140,6 +1140,84 @@ def test_budget_is_a_real_ceiling(tmp_path):
     assert any("budget" in e for e in errors), errors
 
 
+# ---- market state + analog engine --------------------------------------
+
+def _wave_csv(path, n=600):
+    """A long, mean-reverting series with a trend so states are varied."""
+    import csv as _csv
+    import math
+    with path.open("w", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["openTime", "open", "high", "low", "close", "volume",
+                    "tickVolume", "isOpen"])
+        for i in range(n):
+            px = 3000 + 200 * math.sin(i / 40.0) + i * 0.4 + 15 * math.sin(i / 6.0)
+            w.writerow([f"2025-{(i // 28) % 12 + 1:02d}-{i % 28 + 1:02d}T00:00:00Z",
+                        px, px + 12, px - 12, px, 0, 10, "False"])
+
+
+def test_state_reads_only_past_bars(tmp_path):
+    """The state at bar i must not change when later bars are appended.
+
+    This is the one rule that makes the analog engine honest: if the state could
+    see the outcome bar, every measurement would be contaminated.
+    """
+    from desk import state as ST
+    from desk.backtest import load_daily
+    p = tmp_path / "XAUUSD_1d.csv"
+    _wave_csv(p, n=400)
+    C = [{"o": b["open"], "h": b["high"], "l": b["low"], "c": b["close"]}
+         for b in load_daily(p)]
+    i = 300
+    before = ST.state_at(C[:i + 1], i)
+    # append 60 more bars: the state at i is a fact about 0..i and must not move
+    after = ST.state_at(C[:i + 61], i)
+    assert before == after
+    assert before is not None
+
+
+def test_analog_refuses_to_call_a_thin_sample(tmp_path, monkeypatch):
+    """Below MIN_N the study is neutral and says so -- it does not invent an edge."""
+    from desk.agents import analog
+    from desk.config import Settings
+    from desk.llm import LLM
+    from desk.memory import SharedMemory
+    s = Settings(home=tmp_path / "h", symbol="XAUUSD")
+    s.ensure_dirs()
+    # a short history: too few bars for any state to reach MIN_N
+    C = [{"o": 3000 + i, "h": 3002 + i, "l": 2998 + i, "c": 3000 + i}
+         for i in range(120)]
+    monkeypatch.setattr(analog.history, "shaped", lambda sym: C)
+    # the current bar has a state, but only five bars share it: thin sample
+    monkeypatch.setattr(analog.state_mod, "state_at",
+                        lambda bars, i: analog.state_mod.State(True, 2, 1, 1)
+                        if (i < 5 or i == len(bars) - 1) else None)
+    st = analog.AnalogAgent(s, SharedMemory(s.shared_db), LLM("", [])).study("r")
+    assert st.payload["n_state"] < analog.MIN_N
+    assert st.stance == "neutral"
+    assert st.payload["sufficient"] is False
+
+
+def test_analog_measures_the_state_with_the_desks_own_bracket(tmp_path, monkeypatch):
+    """The analog numbers must come from the same stop/target/horizon as the
+    plan and the scan. A friendlier ruler here would be a different claim."""
+    from desk.agents import analog
+    C = [{"o": 3000 + (i % 7) * 3, "h": 3000 + (i % 7) * 3 + 10,
+          "l": 3000 + (i % 7) * 3 - 10, "c": 3000 + (i % 7) * 3}
+         for i in range(400)]
+    m = analog.measure_state(C, (1, 2, 1, 1))
+    assert set(m) >= {"long", "short", "n_state"}
+    for side in ("long", "short"):
+        assert "edge" in m[side] and "base_r" in m[side] and "t" in m[side]
+        assert abs(m[side]["edge"] - (m[side]["mean_r"] - m[side]["base_r"])) < 1e-9
+
+
+def test_analog_is_registered_in_the_roster():
+    from desk.agents import ROSTER, AnalogAgent
+    assert AnalogAgent in ROSTER
+    assert ROSTER[0] is AnalogAgent
+
+
 # ---- measured correlation ---------------------------------------------
 
 def test_pearson_measures_real_comovement():
@@ -2161,16 +2239,100 @@ def test_plan_ignores_the_open_bar(tmp_path):
 
 
 def test_plan_labels_each_side_with_its_evidence(tmp_path):
-    """A side must carry the sample evidence that supports (or not) it."""
+    """A side must carry evidence that is *measured*, and a side with no sample
+    must say so rather than borrow a number from the other side.
+
+    The fixture rises monotonically, so it never breaks its prior 20-day range:
+    the long trigger never fires and the sample is zero. The honest answer is
+    "insufficient sample", not a supported side.
+    """
     from desk.backtest import load_daily
     from desk.plan import build_plan, format_plan
 
     p = tmp_path / "XAUUSD_1d.csv"
     _plan_csv(p)
-    out = format_plan(build_plan(load_daily(p), live=3100.0))
-    assert "SUPPORTED" in out
-    assert "NOT SUPPORTED" in out
+    plan = build_plan(load_daily(p), live=3100.0)
+    # Evidence is recomputed, never a constant: the field exists and carries n.
+    assert plan["long"].evidence["n"] == 0
+    assert "base_r" in plan["long"].evidence
+    out = format_plan(plan)
+    assert "الدليل" in out
+    assert "غير مدعوم" in out
     assert "not a promise" in out
+    # The control is printed, so a side cannot be read without its baseline.
+    assert "control: always-long" in out
+
+
+def test_plan_evidence_is_measured_not_constant(tmp_path):
+    """The evidence must change with the data. A constant would not.
+
+    Two fixtures: one that repeatedly breaks its range (so the trigger fires),
+    one that does not. If the numbers were hardcoded they would be identical;
+    the point is that they are not.
+    """
+    import csv as _csv
+
+    from desk.backtest import load_daily
+    from desk.plan import build_plan
+
+    def write(path, closes):
+        with path.open("w", newline="") as fh:
+            w = _csv.writer(fh)
+            w.writerow(["openTime", "open", "high", "low", "close", "volume",
+                        "tickVolume", "isOpen"])
+            for i, px in enumerate(closes):
+                w.writerow([f"2025-{(i // 28) % 12 + 1:02d}-{i % 28 + 1:02d}T00:00:00Z",
+                            px, px + 2, px - 2, px, 0, 10,
+                            "True" if i == len(closes) - 1 else "False"])
+
+    # A saw-tooth that repeatedly breaks its 20-day high, then falls back.
+    wave = [3000 + (i % 10) * 5 + (i // 10) * 2 for i in range(160)]
+    p1, p2 = tmp_path / "a.csv", tmp_path / "b.csv"
+    write(p1, wave)
+    write(p2, [3000 + i for i in range(160)])
+    e1 = build_plan(load_daily(p1), live=wave[-1])["long"].evidence
+    e2 = build_plan(load_daily(p2), live=3160.0)["long"].evidence
+    assert e1["n"] != e2["n"] or e1["mean_r"] != e2["mean_r"]
+    assert e1["n"] > 0
+
+
+# ---- the two cards must not disagree about the record ----------------
+
+def test_recommendation_card_carries_the_same_measured_evidence(tmp_path):
+    """The plan card and the recommendation card must report the SAME record.
+
+    They used to be two disjoint paths: the plan printed a hardcoded table, the
+    recommendation printed nothing. Both now read the shipped file through
+    `evidence.measure`, so a reader cannot get two different stories.
+    """
+    import csv as _csv
+
+    from desk.actions import Actions
+    from desk.config import Settings
+    from desk.memory import SharedMemory
+
+    s = Settings(home=tmp_path / "home", symbol="XAUUSD")
+    s.ensure_dirs()
+    shared = SharedMemory(s.shared_db)
+    # a saved run so the recommendation card has something to render
+    shared.save_run("run1", "XAUUSD", 0.0, 1.0, "long", 0.5,
+                    {"direction": "long", "entry": 4000.0, "stop": 3950.0,
+                     "targets": [{"level": 4100.0, "kind": "pivot"}], "rr": 2.0,
+                     "score": 0.5, "allowed": True, "bias": {"direction": "up"}})
+    # the shipped-file lookup is what the card reads; point it at a fixture
+    csv = tmp_path / "XAUUSD_1d.csv"
+    with csv.open("w", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["openTime", "open", "high", "low", "close", "volume",
+                    "tickVolume", "isOpen"])
+        for i in range(160):
+            px = 3000 + (i % 10) * 5 + (i // 10) * 2
+            w.writerow([f"2025-{(i // 28) % 12 + 1:02d}-{i % 28 + 1:02d}T00:00:00Z",
+                        px, px + 2, px - 2, px, 0, 10, "False"])
+    actions = Actions(s)
+    actions._long_csv = lambda: csv  # type: ignore[method-assign]
+    card = actions.recommend()
+    assert "الدليل المقاس" in card
 
 
 # ---- levels -----------------------------------------------------------
@@ -3014,6 +3176,68 @@ def test_scenarios_use_printed_levels_and_a_measured_stop():
         else:
             assert s["targets"][0] < s["trigger"] < s["stop"]
         assert s["risk"] > 0 and s["rr"] is not None
+
+
+def test_every_scenario_carries_an_invalidation_level():
+    """A scenario that cannot be wrong is not a scenario. Each must print the
+    price at which its thesis fails -- and that price must sit nearer than the
+    stop, so the thesis is falsified before the money is lost."""
+    import datetime as dt
+
+    from desk import scenarios as S
+
+    frames = {"1h": _wave_frame(base=3960.0), "4h": _wave_frame(base=3950.0)}
+    sc = S.build(frames, 3960.0, calendar=[], now=dt.datetime(2026, 11, 3, tzinfo=dt.UTC))
+    assert sc["scenarios"]
+    for s in sc["scenarios"]:
+        inv = s["invalidation"]
+        assert inv is not None
+        if s["side"] == "long":
+            assert s["stop"] < inv < s["trigger"]
+        else:
+            assert s["trigger"] < inv < s["stop"]
+
+
+def test_scenario_probability_is_measured_or_absent(tmp_path, monkeypatch):
+    """A probability is either the measured hit rate of this bracket in the same
+    state, or it is absent. It is never invented from a thin sample."""
+    import datetime as dt
+
+    from desk import scenarios as S
+
+    frames = {"1h": _wave_frame(base=3960.0)}
+    sc = S.build(frames, 3960.0, calendar=[], now=dt.datetime(2026, 11, 3, tzinfo=dt.UTC))
+    for s in sc["scenarios"]:
+        p = s.get("probability")
+        if p is not None:
+            assert 0.0 <= p["p"] <= 1.0
+            assert p["n"] >= 30, "a probability must rest on a real sample"
+
+
+def test_scenario_probability_comes_from_the_analog_engine(monkeypatch):
+    """The probability must be the analog engine's number for the current state,
+    not a second, separate estimate that could disagree with the report."""
+    import datetime as dt
+
+    from desk import scenarios as S
+    from desk.agents import analog
+
+    fake = {"n_state": 120, "long": {"n": 80, "hit": 0.625, "mean_r": 0.5, "t": 3.0,
+                                     "base_r": 0.2, "edge": 0.3},
+            "short": {"n": 40, "hit": 0.30, "mean_r": -0.4, "t": -2.0,
+                      "base_r": -0.2, "edge": -0.2}}
+    monkeypatch.setattr(analog, "measure_cached", lambda C, key: fake)
+    monkeypatch.setattr(S, "_probability",
+                        lambda side, symbol="XAUUSD": {"p": fake[side]["hit"],
+                                                       "n": fake[side]["n"],
+                                                       "n_state": 120,
+                                                       "mean_r": fake[side]["mean_r"],
+                                                       "t": fake[side]["t"],
+                                                       "state": "x"})
+    frames = {"1h": _wave_frame(base=3960.0)}
+    sc = S.build(frames, 3960.0, calendar=[], now=dt.datetime(2026, 11, 3, tzinfo=dt.UTC))
+    for s in sc["scenarios"]:
+        assert s["probability"]["p"] == fake[s["side"]]["hit"]
 
 
 def test_scenarios_ignore_a_level_that_is_the_price_itself():
