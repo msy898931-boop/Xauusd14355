@@ -151,6 +151,16 @@ Detail for all of these lives in `MARKETDESK.md`; the daily log is `2026-11-02.m
 - **Two entry semantics, deliberately:** `scenarios.py` `entry` = a **breakout
   trigger**; `recommendation.entry` = **market entry at the current price**
   (`mid@issue == entry`). Fill logic must handle both or it hides losses.
+- ⭐ **A once-a-day message belongs on a SCHEDULE, not a resident process.**
+  The Render free instance for this desk got **suspended** (750 instance-hour
+  cap; `/health` → 503 "suspended by its owner"), taking the daemon down with it.
+  The GitHub cron kept running. So the daily map moved to `desk.cli map
+  --once-a-day` in `marketdesk-watch.yml` (date stamped in the cached DESK_HOME),
+  verified `map sent: True` then `map already sent today`. Do NOT add a second
+  free Render service to "back up" the first — that is what trips the cap.
+- ⭐ **The git remote's embedded token goes stale.** A push failed with
+  `could not read Password for 'https://ghu_...'`; fix is
+  `git remote set-url origin https://${GITHUB_TOKEN}@github.com/<o>/<r>.git`.
 - ⭐ **A map is a view, not new math — and "manipulation" is not measurable.**
   `desk/map.py` clusters `indicators.pivots` into ZONES (0.25% ≈ 1×15m ATR, min 2
   touches), splits them by the live price into sell (above) / buy (below) zones,
