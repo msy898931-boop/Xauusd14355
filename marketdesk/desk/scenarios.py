@@ -158,9 +158,15 @@ def _probability(side: str, *, symbol: str = "XAUUSD") -> dict | None:
 
     Probability here is not a model's opinion; it is the hit rate of exactly this
     bracket (stop 1.5xATR, target 2R, 20 bars) on every past day the market was in
-    the same coarse state. It returns None when the state's sample is too thin,
-    and the caller then prints no probability rather than a made-up one -- a
-    "60%" from five samples is a lie with a decimal point.
+    the same coarse state AND broke its prior range on this side -- the same
+    trigger the plan uses. The measurement is per SIDE, so every long scenario
+    shares one number and every short scenario shares another; that is honest, and
+    the render says so rather than implying each scenario was measured alone.
+
+    Returns None only when the state itself cannot be computed. Otherwise it
+    returns the count even when the sample is too thin, with `sufficient=False`,
+    so the card can say "n=12, too few" instead of showing nothing and leaving the
+    reader to guess whether it was measured.
     """
     from . import history
     from . import state as state_mod
@@ -174,10 +180,10 @@ def _probability(side: str, *, symbol: str = "XAUUSD") -> dict | None:
         return None
     m = measure_cached(C, cur.key())
     s = m.get(side) or {}
-    if s.get("n", 0) < MIN_N:
-        return None
-    return {"p": s["hit"], "n": s["n"], "n_state": m["n_state"],
-            "mean_r": s["mean_r"], "t": s["t"], "state": cur.label_ar()}
+    n = s.get("n", 0)
+    return {"p": s.get("hit"), "n": n, "n_state": m["n_state"],
+            "mean_r": s.get("mean_r", 0.0), "t": s.get("t", 0.0),
+            "sufficient": n >= MIN_N, "state": cur.label_ar()}
 
 
 def build(bars_by_frame: dict[str, list[dict]], live: float,
@@ -354,8 +360,12 @@ def render(sc: dict) -> str:
                  + "، ".join(f"{t:,.2f}" for t in s["targets"]))
         prob = s.get("probability")
         if prob:
-            L.append(f"      🎲 احتمال الوصول (مقاس): <b>{prob['p']:.0%}</b> "
-                     f"من {prob['n']} حالة مشابهة · توقع {prob['mean_r']:+.2f}R")
+            if prob.get("sufficient"):
+                L.append(f"      🎲 احتمال الوصول (مقاس): <b>{prob['p']:.0%}</b> "
+                         f"من {prob['n']} حالة مشابهة · توقع {prob['mean_r']:+.2f}R")
+            else:
+                L.append(f"      🎲 عيّنة الجانب صغيرة: n={prob['n']} — ما منعطي "
+                         f"احتمالاً (بلا رقم مخترع).")
         if s.get("invalidation") is not None:
             L.append(f"      ❌ يُبطَل عند <b>{s['invalidation']:,.2f}</b> "
                      f"(فشل الاختراق ورجوعه)")

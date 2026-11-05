@@ -3394,7 +3394,9 @@ def test_every_scenario_carries_an_invalidation_level():
 
 def test_scenario_probability_is_measured_or_absent(tmp_path, monkeypatch):
     """A probability is either the measured hit rate of this bracket in the same
-    state, or it is absent. It is never invented from a thin sample."""
+    state, or it carries its count with `sufficient=False`. It is never invented
+    from a thin sample, and it is never silently dropped either -- a bare absence
+    leaves the reader unable to tell "too few" from "not measured"."""
     import datetime as dt
 
     from desk import scenarios as S
@@ -3404,8 +3406,12 @@ def test_scenario_probability_is_measured_or_absent(tmp_path, monkeypatch):
     for s in sc["scenarios"]:
         p = s.get("probability")
         if p is not None:
-            assert 0.0 <= p["p"] <= 1.0
-            assert p["n"] >= 30, "a probability must rest on a real sample"
+            if p["sufficient"]:
+                assert 0.0 <= p["p"] <= 1.0
+                assert p["n"] >= 30, "a shown probability must rest on a real sample"
+            else:
+                assert p["n"] < 30
+                assert p["p"] is None or p["p"] == 0.0
 
 
 def test_scenario_probability_comes_from_the_analog_engine(monkeypatch):
@@ -3427,11 +3433,37 @@ def test_scenario_probability_comes_from_the_analog_engine(monkeypatch):
                                                        "n_state": 120,
                                                        "mean_r": fake[side]["mean_r"],
                                                        "t": fake[side]["t"],
+                                                       "sufficient": True,
                                                        "state": "x"})
     frames = {"1h": _wave_frame(base=3960.0)}
     sc = S.build(frames, 3960.0, calendar=[], now=dt.datetime(2026, 11, 3, tzinfo=dt.UTC))
     for s in sc["scenarios"]:
         assert s["probability"]["p"] == fake[s["side"]]["hit"]
+
+
+def test_report_prints_the_scenarios_not_only_the_verdict():
+    """The card is the recommendation AND its scenarios. A verdict with no
+    scenarios is half a machine; the desk must print both halves."""
+
+    from desk import report
+    from desk.orchestrator import Run
+
+    sc = {"symbol": "XAUUSD", "live": 4090.0, "scenarios": [
+        {"kind": "breakdown", "side": "short", "trigger": 4084.2, "confirm": 4083.2,
+         "frame": "5m", "stop": 4091.0, "risk": 7.0, "rr": 1.8, "targets": [4071.6],
+         "probability": {"p": 0.20, "n": 65, "mean_r": -0.49, "t": -1.0,
+                         "sufficient": True, "state": "x"},
+         "invalidation": 4085.2, "why": "كسر", "sizing": None}],
+        "probability_state": "تحت المتوسط 50 · RSI ضعيف"}
+    rec = {"scenarios": sc, "bias": {"direction": "flat", "score": 0.0},
+           "allowed": True}
+    run = Run("r1", "XAUUSD", 0.0, [], "no-trade", 0.0, rec, [], 1.0)
+    text = report.render(run)
+    assert "السيناريوهات" in text
+    assert "4,084.20" in text
+    assert "20%" in text
+    assert "يُبطَل" in text
+    assert "<b>" not in text, "the plain card must not carry HTML tags"
 
 
 def test_scenarios_ignore_a_level_that_is_the_price_itself():

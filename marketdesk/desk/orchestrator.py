@@ -377,6 +377,15 @@ class Orchestrator:
         rec["gather"] = gather
         rec["errors"] = errors
         rec["llm"] = self.llm.stats()
+        # The scenarios are not a separate button: they are the other half of the
+        # recommendation. A verdict says which way the desk leans; the scenarios
+        # say what would have to happen for that to be wrong, and what it would
+        # cost. Built from the same closed frames the agents saw, so the two
+        # halves of the card can never disagree about the levels.
+        try:
+            rec["scenarios"] = self.scenarios()
+        except Exception as exc:              # a scenario set is a bonus, not a gate
+            rec["scenarios_error"] = str(exc)
         # A plan in play is part of the picture: a reader must know the desk is
         # already following a call before they read a fresh "no trade".
         from . import active as _active
@@ -518,6 +527,39 @@ class Orchestrator:
         """The price to judge the active plan against: the run's own quote when
         it has one, else the last quote in shared memory."""
         return self._live_price_from_rec(run.recommendation)
+
+    def scenarios(self) -> dict:
+        """The conditional scenario set for the current read.
+
+        Reads only what a run already stored -- the closed frames and the
+        calendar -- so it costs no network call and cannot disagree with the
+        agents about the levels. Same settings as the standalone button, so the
+        report and `/scenarios` print the same thing.
+        """
+        from . import scenarios as S
+
+        live = (self.shared.load_quote(self.settings.symbol) or {}).get("mid")
+        if not isinstance(live, (int, float)):
+            bars = self.shared.load_candles(self.settings.symbol, "1d")
+            live = bars[-1]["close"] if bars else None
+        if live is None:
+            return {"symbol": self.settings.symbol, "live": 0.0, "scenarios": [],
+                    "note": "لا سعر لبناء السيناريو."}
+        frames: dict[str, list[dict]] = {}
+        for tf in self.settings.timeframes:
+            rows = self.shared.load_candles(self.settings.symbol, tf)
+            frames[tf] = [{"t": r["open_time"], "o": r["open"], "h": r["high"],
+                           "l": r["low"], "c": r["close"], "open": bool(r["is_open"])}
+                          for r in rows]
+        return S.build(frames, float(live), self.shared.load_calendar(),
+                       window_h=self.settings.event_window_h,
+                       symbol=self.settings.symbol, balance=self.settings.balance,
+                       risk_pct=self.settings.risk_pct,
+                       contract_size=self.settings.contract_size,
+                       lot_step=self.settings.lot_step, spread=self.settings.spread,
+                       min_stop_points=self.settings.min_stop_points,
+                       max_stop_points=self.settings.max_stop_points,
+                       min_rr=self.settings.min_rr)
 
     def _live_price_from_rec(self, rec: dict) -> float | None:
         q = (rec.get("gather") or {}).get("quote") or {}

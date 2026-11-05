@@ -24,6 +24,53 @@ def _n(v, nd=2, suffix=""):
         return str(v)
 
 
+def _scenarios_plain(sc: dict) -> str:
+    """The scenario set as plain text, for the main card.
+
+    `scenarios.render` emits Telegram HTML; the card is read in a terminal, so
+    the tags would show. Same content, same numbers, no markup.
+    """
+    L = [f"— السيناريوهات — (السعر {_n(sc.get('live'), 2)})"]
+    if sc.get("probability_state"):
+        L.append(f"  حالة السوق المقاسة: {sc['probability_state']}")
+    if sc.get("event"):
+        e = sc["event"]
+        L.append(f"  ⚠ حدث خلال {e['hours']:g} ساعة: {e['name']} [{e['currency']}]")
+    if not sc.get("scenarios"):
+        L.append(f"  {sc.get('note') or 'لا مستويات كافية لبناء سيناريو.'}")
+        return "\n".join(L)
+    heads = {"breakout": "اختراق صعود", "breakdown": "كسر هبوط", "deeper": "هبوط أعمق"}
+    for s in sc["scenarios"]:
+        arrow = "🟢" if s["side"] == "long" else "🔴"
+        rr = f" · R:R {s['rr']}" if s.get("rr") else ""
+        L.append(f"  {arrow} {heads.get(s['kind'], s['kind'])} — يتفعّل عند "
+                 f"{_n(s['trigger'])} (تأكيد {_n(s['confirm'])}) [{s['frame']}]")
+        L.append(f"      الوقف {_n(s['stop'])} ({s['risk']:,.0f} نقطة){rr} · الهدف "
+                 + "، ".join(_n(t) for t in s["targets"]))
+        prob = s.get("probability")
+        if prob:
+            if prob.get("sufficient"):
+                L.append(f"      🎲 احتمال مقاس: {prob['p']:.0%} من {prob['n']} حالة · "
+                         f"توقع {prob['mean_r']:+.2f}R")
+            else:
+                L.append(f"      🎲 عيّنة الجانب صغيرة: n={prob['n']} — بلا احتمال.")
+        if s.get("invalidation") is not None:
+            L.append(f"      ❌ يُبطَل عند {_n(s['invalidation'])}")
+        sz = s.get("sizing")
+        if sz is not None:
+            if sz.feasible:
+                money = (f"💵 {sz.lots:g} لوت · تخاطر ${sz.risk_money:,.2f} "
+                         f"({sz.risk_pct_actual:.1f}%)")
+                if sz.reward_money is not None:
+                    money += f" · تربح ${sz.reward_money:,.2f}"
+                L.append(f"      {money}")
+            else:
+                L.append(f"      🚫 ما بتنفع لهالحساب — أصغر حجم ({sz.min_lots:g}) "
+                         f"يخاطر ${sz.min_risk_money:,.2f} = {sz.min_risk_pct:.1f}%")
+    L.append("  (سيناريوهات مشروطة على مستويات مطبوعة — مو توصية.)")
+    return "\n".join(L)
+
+
 def render(run: Run, lang: str = "ar") -> str:
     r = run.recommendation
     L: list[str] = []
@@ -88,6 +135,12 @@ def render(run: Run, lang: str = "ar") -> str:
         mult = r.get("vol_mult")
         note = "" if mult in (None, 1.0) else f" → وسّعنا الوقف {mult:.2f}×"
         L.append(f"  نشاط آخر شمعة ساعة: {r['vol_ratio']:.2f}× المتوسط{note}")
+    # The scenarios are the other half of the recommendation: not "where is it
+    # going" but "what has to happen, and what proves it wrong". Rendered from
+    # the same object `/scenarios` prints, so the card and the button agree.
+    if r.get("scenarios"):
+        L.append("")
+        L.append(_scenarios_plain(r["scenarios"]))
     if r.get("levels_note"):
         L.append(f"  ملاحظة: {r['levels_note']}")
     if r.get("warnings"):
