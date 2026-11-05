@@ -22,6 +22,21 @@ class Level:
     label: str
     side: str          # "above" or "below": the side that counts as a break
     note: str
+    # The trade this break calls for, when there is one. A level that only says
+    # "price broke 4,145" leaves the reader to invent the stop, the target and
+    # the reason; the owner asked to be told what to do and why, so the call
+    # travels with the level. Empty for a pure marker (e.g. a stop line).
+    call_side: str = ""       # "long" | "short" | ""
+    stop: float | None = None
+    target: float | None = None
+    why: str = ""
+
+    def trade_call(self) -> dict | None:
+        """The actionable trade, or None when the level is only a marker."""
+        if self.call_side not in ("long", "short") or self.stop is None:
+            return None
+        return {"direction": self.call_side, "entry": self.price,
+                "stop": self.stop, "target": self.target, "why": self.why}
 
 
 # The levels the live plan is built around. Edit this list as the plan changes;
@@ -103,9 +118,38 @@ def near_fingerprint(lv: Level) -> str:
 def message(lv: Level, live: float) -> str:
     arrow = "▲" if lv.side == "above" else "▼"
     verb = "اخترق" if lv.side == "above" else "كسر"
-    return (f"{arrow} <b>تنبيه مستوى</b>\n"
+    head = (f"{arrow} <b>تنبيه مستوى</b>\n"
             f"السعر {live:,.2f} {verb} <b>{lv.price:,.2f}</b> ({lv.label})\n"
             f"{lv.note}")
+    call = lv.trade_call()
+    if not call:
+        return head
+    return head + "\n\n" + call_text(call, live)
+
+
+def call_text(call: dict, live: float) -> str:
+    """The instruction: do what, at what, with which stop and target, and why.
+
+    The alert used to say only that a level broke, leaving the reader to invent
+    the stop, the target and the reason. This says it. Risk is stated in money
+    for the account the desk is sized for, so "10 points" is never mistaken for
+    "small".
+    """
+    long = call["direction"] == "long"
+    stop, target = call.get("stop"), call.get("target")
+    action = "🟢 <b>اشترِ</b>" if long else "🔴 <b>بِع</b>"
+    lines = [f"{action} — السعر {live:,.2f} تجاوز {call['entry']:,.2f}"]
+    if stop is not None:
+        pts = abs(live - stop)
+        lines.append(f"      الوقف <b>{stop:,.2f}</b> ({pts:.0f} نقطة)")
+    if target is not None:
+        pts = abs(target - live)
+        rr = (abs(target - live) / abs(live - stop)) if stop and live != stop else None
+        tail = f" · R:R {rr:.2f}" if rr else ""
+        lines.append(f"      الهدف <b>{target:,.2f}</b> ({pts:.0f} نقطة{tail})")
+    if call.get("why"):
+        lines.append(f"      <i>{call['why']}</i>")
+    return "\n".join(lines)
 
 
 def near_message(lv: Level, live: float, dist: float) -> str:
@@ -145,9 +189,12 @@ def from_recommendation(rec: dict, live: float) -> tuple[Level, ...]:
     target = targets[0].get("level") if targets and isinstance(targets[0], dict) \
         else (targets[0] if targets else None)
     long = direction == "long"
+    why = f"توصية المكتب · R:R {rec.get('rr')}" if rec.get("rr") else "توصية المكتب"
     out: list[Level] = [
         Level(float(entry), "دخول التوصية", "above" if long else "below",
-              f"{'شراء' if long else 'بيع'} من هنا — هاد مستوى الدخول"),
+              f"{'شراء' if long else 'بيع'} من هنا — هاد مستوى الدخول",
+              call_side=direction, stop=float(stop),
+              target=float(target) if target is not None else None, why=why),
         Level(float(stop), "وقف التوصية", "below" if long else "above",
               "ضُرب الوقف هنا — الخطة انتهت"),
     ]
@@ -187,7 +234,12 @@ def from_scenarios(settings, live: float, *, symbol: str | None = None) -> tuple
                        "l": r["low"], "c": r["close"], "open": bool(r["is_open"])}
                       for r in rows]
     sc = S.build(frames, live, shared.load_calendar(),
-                 window_h=settings.event_window_h, symbol=symbol)
+                 window_h=settings.event_window_h, symbol=symbol,
+                 balance=settings.balance, risk_pct=settings.risk_pct,
+                 contract_size=settings.contract_size, lot_step=settings.lot_step,
+                 spread=settings.spread,
+                 min_stop_points=settings.min_stop_points,
+                 max_stop_points=settings.max_stop_points)
     labels = {"breakout": "اختراق صعود", "breakdown": "كسر هبوط", "deeper": "هبوط أعمق"}
     out: list[Level] = []
     for item in sc.get("scenarios") or []:
@@ -196,10 +248,23 @@ def from_scenarios(settings, live: float, *, symbol: str | None = None) -> tuple
             continue
         # A long breakout is confirmed ABOVE its level; a short breakdown BELOW.
         side = "above" if item.get("side") == "long" else "below"
+        kind = labels.get(item.get("kind", ""), str(item.get("kind")))
+        stop = item.get("stop")
+        tgt = (item.get("targets") or [None])[0]
+        rr = item.get("rr")
+        # Only a scenario that pays its way gets a buy/sell instruction: a break
+        # with R:R under the desk's own floor is a level to watch, not a trade to
+        # take, and calling it a trade would be the alert inventing conviction.
+        actionable = rr is not None and rr >= 1.5
+        why = (f"سيناريو {item.get('frame')} · تأكيد بإغلاق "
+               f"{item.get('confirm')} · R:R {rr}")
         out.append(Level(
-            float(trigger), labels.get(item.get("kind", ""), str(item.get("kind"))), side,
-            f"سيناريو {item.get('frame')} · تأكيد {item.get('confirm')} · "
-            f"R:R {item.get('rr')}"))
+            float(trigger), kind, side,
+            f"سيناريو {item.get('frame')} · تأكيد {item.get('confirm')} · R:R {rr}",
+            call_side=item.get("side") if actionable else "",
+            stop=float(stop) if (actionable and stop is not None) else None,
+            target=float(tgt) if (actionable and tgt is not None) else None,
+            why=why if actionable else ""))
     return tuple(out)
 
 

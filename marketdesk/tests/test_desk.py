@@ -4279,3 +4279,57 @@ def test_a_breakout_target_is_never_behind_its_trigger():
         else:
             assert tgt < trig, f"short target {tgt} not below trigger {trig}"
         assert s["rr"] and s["rr"] > 0
+
+
+def test_an_actionable_level_carries_the_trade_call():
+    """The owner asked to be told what to do and why, not just that a level broke.
+    A level built for a trade must render buy/sell, the stop, the target and the
+    reason in one message."""
+    from desk.levels import Level, message
+    lv = Level(4145.42, "اختراق صعود", "above", "ملاحظة",
+               call_side="long", stop=4134.89, target=4170.52, why="سيناريو 15m")
+    txt = message(lv, 4145.92)
+    assert "اشترِ" in txt
+    assert "4,134.89" in txt and "4,170.52" in txt
+    assert "سيناريو 15m" in txt
+    assert lv.trade_call()["direction"] == "long"
+
+
+def test_a_marker_level_gives_no_instruction():
+    """A stop line or a low-reward level is a marker, not a trade. It must not be
+    dressed up as buy/sell -- the alert would be inventing conviction."""
+    from desk.levels import Level, message
+    lv = Level(4108.99, "كسر هبوط", "below", "ملاحظة")
+    txt = message(lv, 4108.5)
+    assert "بِع" not in txt and "اشترِ" not in txt
+    assert lv.trade_call() is None
+
+
+def test_scenario_levels_only_call_a_trade_when_it_pays(tmp_path):
+    """Every scenario level that carries a buy/sell must have its stop and target
+    on the right sides and clear the desk's own R:R floor -- no level may be
+    presented as a trade the desk itself would refuse."""
+    import datetime as _dt
+
+    from desk.levels import from_scenarios
+    from desk.memory import SharedMemory
+    s = _settings(tmp_path)
+    shared = SharedMemory(s.shared_db)
+    now = _dt.datetime.now(_dt.UTC)
+    ep = (now - _dt.timedelta(hours=2)).timestamp()
+
+    def path(i):
+        return 4000 + (i % 12) * 2.0
+    shared.save_candles(s.symbol, "5m", _mkbars(ep, 5, 60, path))
+    shared.save_candles(s.symbol, "15m", _mkbars(ep, 15, 60, path))
+    for lv in from_scenarios(s, 4024.0):
+        call = lv.trade_call()
+        if not call:
+            continue
+        assert call["direction"] in ("long", "short")
+        if call["direction"] == "long":
+            assert call["stop"] < lv.price < call["target"]
+        else:
+            assert call["target"] < lv.price < call["stop"]
+        rr = abs(call["target"] - lv.price) / abs(lv.price - call["stop"])
+        assert rr >= 1.5 - 1e-9, f"level {lv.price} called with R:R {rr}"

@@ -39,6 +39,31 @@ class Notifier:
     def available(self) -> bool:
         return bool(self.token and self.chat_id)
 
+    def probe(self) -> tuple[bool, str]:
+        """Ask Telegram whether this token is real, then prove the chat works.
+
+        `available` only checks that two strings are non-empty, so it reads True
+        for a token that has been revoked, mistyped, or is not a token at all.
+        This environment is the proof: `available` is True while `getMe` returns
+        404. The only honest check is the API call, and it is one request.
+        """
+        if not self.available:
+            return False, "التوكن أو معرّف المحادثة غير مضبوط."
+        url = f"https://api.telegram.org/bot{self.token}/getMe"
+        try:
+            with urllib.request.urlopen(url, timeout=15) as r:
+                data = json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            return False, f"getMe رجّع {e.code} — التوكن مرفوض من تلغرام."
+        except (urllib.error.URLError, ValueError, TimeoutError) as e:
+            return False, f"تعذّر الوصول لتلغرام: {type(e).__name__}."
+        if not data.get("ok"):
+            return False, "getMe رجّع ok=false."
+        bot = data.get("result", {}).get("username", "?")
+        if not self.send("MarketDesk — فحص التنبيه: الأنبوب شغّال ✅"):
+            return False, f"التوكن صحيح (@{bot}) بس الإرسال للمحادثة فشل."
+        return True, f"التوكن صحيح (@{bot}) والرسالة وصلت للمحادثة."
+
     def send(self, text: str) -> bool:
         """Send one message. Returns False when unconfigured or on failure —
         the caller decides whether that matters."""

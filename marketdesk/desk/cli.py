@@ -351,9 +351,6 @@ def cmd_check_alerts(args) -> int:
     exactly like 'no signal yet'. This separates the three cases: not
     configured, token rejected, and chat unreachable. Secrets are never printed.
     """
-    import urllib.error
-    import urllib.request
-
     from .notify import Notifier
 
     s = _settings(args)
@@ -363,32 +360,18 @@ def cmd_check_alerts(args) -> int:
     if not s.telegram_token:
         print("result: NOT CONFIGURED — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
         return 2
-    try:
-        with urllib.request.urlopen(
-                f"https://api.telegram.org/bot{s.telegram_token}/getMe", timeout=15) as r:
-            d = json.loads(r.read().decode())
-    except urllib.error.HTTPError as e:
-        print(f"getMe: FAILED {e.code} — the token is not valid")
-        return 1
-    except (urllib.error.URLError, TimeoutError, ValueError) as e:
-        print(f"getMe: FAILED ({type(e).__name__}) — cannot reach Telegram")
-        return 1
-    if not d.get("ok"):
-        print("getMe: FAILED — token rejected")
-        return 1
-    print(f"getMe: ok · bot @{(d.get('result') or {}).get('username')}")
-    if not s.telegram_chat_id:
-        print("result: token is valid, but chat_id is missing")
-        return 2
-    if args.send:
-        ok = n.send("MarketDesk — اختبار التنبيه: الأنبوب يعمل.")
-        print(f"test send: {'delivered' if ok else 'FAILED — the bot cannot reach this chat'}")
+    if not args.send:
+        # Without --send this stays a read-only report; the probe sends a real
+        # message, so it is only run when the caller asked for one.
+        ok, why = n.probe()
+        print(f"probe: {why}")
+        fresh, dfresh = Orchestrator(s).data_fresh()
+        print(f"data fresh:  {'yes' if dfresh else 'NO — ' + dfresh}"
+              f"  (limit {s.max_data_age_s / 3600:.1f}h, DESK_MAX_DATA_AGE_S)")
         return 0 if ok else 1
-    fresh, why = Orchestrator(s).data_fresh()
-    print(f"data fresh:  {'yes' if fresh else 'NO — ' + why}"
-          f"  (limit {s.max_data_age_s / 3600:.1f}h, DESK_MAX_DATA_AGE_S)")
-    print("result: ready (add --send to deliver a test message)")
-    return 0
+    ok, why = n.probe()
+    print(f"probe: {why}")
+    return 0 if ok else 1
 
 
 def cmd_account(args) -> int:
