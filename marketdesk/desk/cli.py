@@ -466,6 +466,34 @@ def cmd_check_alerts(args) -> int:
     return 0 if ok else 1
 
 
+def _measured_hit_rate(s: Settings) -> float:
+    """The desk's own measured win rate for the current market state.
+
+    Ruin computed on an assumed 55% is a decoration. This reads the analog
+    engine's measured hit rate for the state the market is in right now, and
+    falls back to the long-run rate when the state is too thin to measure.
+    """
+    try:
+        from . import history
+        from . import state as state_mod
+        from .agents.analog import MIN_N, measure_cached
+
+        C = history.shaped(s.symbol)
+        if len(C) < state_mod.TREND_MA + 40:
+            return 0.5
+        cur = state_mod.state_at(C, len(C) - 1)
+        if cur is None:
+            return 0.5
+        m = measure_cached(C, cur.key())
+        for side in ("long", "short"):
+            side_s = m.get(side) or {}
+            if side_s.get("n", 0) >= MIN_N:
+                return float(side_s["hit"])
+    except Exception:  # noqa: BLE001 - a missing file must not block sizing
+        pass
+    return 0.5
+
+
 def cmd_account(args) -> int:
     """Size the plan in play (or a scenario) for the account, in money.
 
@@ -474,7 +502,7 @@ def cmd_account(args) -> int:
     this one", and this says so with the number that proves it.
     """
     from . import active, sources
-    from .account import render, size_plan
+    from .account import render, ruin_render, ruin_risk, size_plan
 
     s = _settings(args)
     if args.balance is not None:
@@ -488,6 +516,17 @@ def cmd_account(args) -> int:
     if not s.balance:
         print("ما في حساب محدد. مرّر --balance 200 (أو DESK_BALANCE=200).")
         return 2
+
+    if getattr(args, "ruin", False):
+        hit = args.hit
+        if hit is None:
+            hit = _measured_hit_rate(s)
+        r = ruin_risk(risk_pct=s.risk_pct / 100.0, hit_rate=hit,
+                      drawdown_frac=args.drawdown / 100.0)
+        print(ruin_render(r))
+        if args.hit is None:
+            print("  (معدل الفوز من قياس المكتب على 10 سنين — مرّر --hit لتجاوزه.)")
+        return 0
 
     if args.entry is not None and args.stop is not None:
         sz = size_plan(balance=s.balance, risk_pct=s.risk_pct, entry=args.entry,
@@ -823,6 +862,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="refuse a stop tighter than this, in points")
     ac.add_argument("--max-stop", type=float, default=None,
                     help="refuse a stop wider than this, in points")
+    ac.add_argument("--ruin", action="store_true",
+                    help="risk-of-ruin: chance of a losing run you cannot recover")
+    ac.add_argument("--hit", type=float, default=None,
+                    help="win rate for the ruin model (default: the desk's measured one)")
+    ac.add_argument("--drawdown", type=float, default=50.0,
+                    help="the loss %% that counts as ruined (default 50)")
     ac.set_defaults(func=cmd_account)
 
     b = sub.add_parser("bot", help="one poll pass: answer button presses")

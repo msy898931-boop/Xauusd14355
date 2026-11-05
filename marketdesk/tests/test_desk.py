@@ -1333,6 +1333,64 @@ def test_calibration_is_wired_to_the_cli():
     assert ns.func.__name__ == "cmd_calibration"
 
 
+# ---- risk of ruin (Phase 4) -------------------------------------------
+
+def test_ruin_of_a_profitable_system_is_near_zero():
+    """A 2R win at a coin-flip hit rate is profitable, so the account must almost
+    never touch the ruin level. The model has to be able to say 'safe'."""
+    from desk.account import ruin_risk
+
+    r = ruin_risk(risk_pct=0.02, hit_rate=0.5)
+    assert r.p_ruin < 0.01
+    assert r.safe is True
+
+
+def test_ruin_of_the_desks_measured_rate_is_severe():
+    """The desk's own measured hit rate for its bracket is ~20%. At 2R that is a
+    losing system, and the ruin model must say so loudly -- not flatter it."""
+    from desk.account import ruin_risk
+
+    r = ruin_risk(risk_pct=0.02, hit_rate=0.2)
+    assert r.p_ruin > 0.5
+    assert r.safe is False
+
+
+def test_ruin_counts_losses_in_a_row():
+    """With a fixed dollar loss the level is reached after a plain count of
+    consecutive losses -- 50% at 2% a trade is 25 losses, not 34."""
+    from desk.account import ruin_risk
+
+    r = ruin_risk(risk_pct=0.02, hit_rate=0.5, drawdown_frac=0.5)
+    assert r.losses_to_ruin == 25
+    r2 = ruin_risk(risk_pct=0.01, hit_rate=0.5, drawdown_frac=0.5)
+    assert r2.losses_to_ruin == 50
+
+
+def test_ruin_reports_its_sample():
+    """A frequency off a simulation must carry the path count, or it reads like a
+    closed form. The render must print it."""
+    from desk.account import ruin_render, ruin_risk
+
+    r = ruin_risk(risk_pct=0.02, hit_rate=0.3, sample=1000)
+    assert r.sample == 1000
+    assert "1,000" in ruin_render(r)
+
+
+def test_ruin_is_deterministic_for_a_seed():
+    from desk.account import ruin_risk
+
+    a = ruin_risk(risk_pct=0.02, hit_rate=0.35, seed=3)
+    b = ruin_risk(risk_pct=0.02, hit_rate=0.35, seed=3)
+    assert a.p_ruin == b.p_ruin
+
+
+def test_ruin_is_wired_to_the_account_cli():
+    from desk.cli import build_parser
+    ns = build_parser().parse_args(["account", "--balance", "200", "--ruin"])
+    assert ns.ruin is True
+    assert ns.func.__name__ == "cmd_account"
+
+
 # ---- walk-forward -----------------------------------------------------
 
 def test_walkforward_has_no_lookahead():

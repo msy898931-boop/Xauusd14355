@@ -27,6 +27,11 @@ bite hardest:
 * **It refuses a stop outside the trader's own tolerance** -- wider than the cap
   they set, or tighter than the floor (a stop inside the noise is not a stop).
   A stop the trader will not honour is not a stop.
+
+It also answers the question a risk percentage hides: **how many losses in a row
+before the account is unusable?** `ruin_risk` is the probability of that run
+under the desk's own measured hit rate. It is deliberately a *sequence* model,
+not a closed-form gambler's ruin -- see the function for why.
 """
 
 from __future__ import annotations
@@ -173,4 +178,91 @@ def render(s: Sizing, symbol: str = "XAUUSD", direction: str = "") -> str:
     if s.lots == s.min_lots:
         L.append("<i>ملاحظة: هاد أصغر حجم متاح — المخاطرة الفعلية "
                  f"{s.risk_pct_actual:.1f}% مو {s.risk_pct:.1f}%.</i>")
+    return "\n".join(L)
+
+
+@dataclass
+class Ruin:
+    """The chance of a losing run the account cannot recover from."""
+
+    risk_pct: float          # the per-trade loss, as a fraction of the balance
+    hit_rate: float          # the desk's own measured win rate for this setup
+    drawdown_frac: float     # the loss fraction that counts as "ruined" (e.g. 0.5)
+    n_trades: int            # how many trades the sequence was run over
+    p_ruin: float            # probability of touching the ruin level at least once
+    losses_to_ruin: int      # consecutive losses that reach the level
+    sample: int              # how many sequences were simulated
+
+    @property
+    def safe(self) -> bool:
+        return self.p_ruin < 0.05
+
+
+def ruin_risk(*, risk_pct: float, hit_rate: float, drawdown_frac: float = 0.5,
+              n_trades: int = 200, sample: int = 20000,
+              seed: int = 11) -> Ruin:
+    """Probability that a run of trades ever cuts the account by `drawdown_frac`.
+
+    WHY A SEQUENCE MODEL, NOT gambler's ruin. The textbook closed form assumes
+    every trade risks the same fraction of the *current* balance and wins a fixed
+    multiple -- a random walk in log-space. The desk's own numbers are not that:
+    a stop is a fixed money loss (0.5 x ATR), the win is a fixed R multiple, and
+    the desk trades a fixed size, so the loss fraction of the balance is what
+    moves. Modelling that with the closed form would be a tidy number for the
+    wrong process.
+
+    So this runs the process: `sample` sequences of `n_trades`, each trade a win
+    at the desk's measured hit rate, and the balance moved by a FIXED dollar
+    amount -- `risk_pct` of the starting balance lost, twice that won. Fixed
+    money, not a fixed fraction of a shrinking balance, because that is what the
+    desk does: it trades a fixed lot size, so a loss is a constant number of
+    dollars and it therefore eats a growing share of a shrinking account. That is
+    the more dangerous reading, and the honest one.
+
+    The result is a frequency, and the sample is reported beside it so nobody
+    reads three significant figures off 40 paths.
+
+    `hit_rate` is the desk's measured win rate for this bracket, not an assumed
+    55%. If the desk has no measured edge, the honest input is its measured rate
+    and the ruin number that follows is the honest one.
+    """
+    import random
+
+    rng = random.Random(seed)
+    dd = max(0.05, min(0.95, drawdown_frac))
+    risk_pct = max(0.0, min(0.99, risk_pct))
+    # A 2R win against a 1R loss is the desk's bracket; keep the ratio here so
+    # the number matches the plans the desk actually prints.
+    win_r, loss_r = 2.0, 1.0
+    p = max(0.0, min(1.0, hit_rate))
+    loss_frac = risk_pct * loss_r          # of the STARTING balance, fixed money
+    win_frac = risk_pct * win_r
+    ruined = 0
+    for _ in range(sample):
+        bal = 1.0
+        for _t in range(n_trades):
+            bal += win_frac if rng.random() < p else -loss_frac
+            if bal <= 1.0 - dd:
+                ruined += 1
+                break
+    # With a fixed dollar loss the level is reached after a plain number of
+    # losses in a row: no compounding, so no logarithm.
+    from math import ceil
+    n_consec = (max(1, ceil(dd / risk_pct - 1e-9)) if risk_pct > 0
+                else n_trades + 1)
+    return Ruin(risk_pct=risk_pct, hit_rate=p, drawdown_frac=dd,
+                n_trades=n_trades, p_ruin=ruined / sample,
+                losses_to_ruin=n_consec, sample=sample)
+
+
+def ruin_render(r: Ruin) -> str:
+    """The ruin view, Arabic, honest about the sample behind it."""
+    L = [f"🎲 <b>خطر الخراب</b> — مخاطرة {r.risk_pct:.1%} للصفقة · "
+         f"معدل فوز مقاس {r.hit_rate:.0%}"]
+    L.append(f"  احتمال ما ينزل الحساب {r.drawdown_frac:.0%} خلال "
+             f"{r.n_trades} صفقة: <b>{r.p_ruin:.2%}</b>")
+    L.append(f"  {r.losses_to_ruin} خسارة متتالية تكفي للوصول لهالمستوى.")
+    L.append(f"  <i>محاكاة على {r.sample:,} مسار — الرقم تكرار، مو معادلة.</i>")
+    if not r.safe:
+        L.append("  ⚠ <b>خطر مرتفع.</b> قلّل المخاطرة %، أو اشتغل بحساب أكبر.")
     return "\n".join(L)
