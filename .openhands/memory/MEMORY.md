@@ -92,167 +92,33 @@ Coinbase fallback), **~0.2% premium** which is a *level* bug, not a label bug:
 The in-process rate limit / error log are per-process → `--workers 1`.
 Detail → `ANALYSISDESK.md`.
 
-## marketdesk: the always-on daemon (2026-11-02)
-⭐ **"Always-on" and "instant" are different promises.** Telegram was two loops
-that never spoke (`serve` = market only; `bot --listen` = chat only) because a
-GitHub runner is a fresh VM and nothing stays resident — the bot was awake ~33%
-of the time. `desk daemon` (`desk/daemon.py`) is ONE process, three cadences:
-chat long-polled (~1s reply), levels every 10s, a reading every 15m. The feed is
-*polled HTTP*, so the finest honest cadence is the level interval — never promise
-tick-instant on a polled feed. The market closes Fri 21:00 → Sun 22:00 UTC, so
-"never sleeps" has a hole: market jobs stand down, the chat keeps serving.
-A daemon must outlive its failures — catch every job (a rejected token backs off,
-it must not kill the process). Cadence clocks start at `-inf`, not 0, or the first
-tick runs nothing. A container needs a volume at `DESK_HOME` or it re-sends alerts
-it already sent. Free Render has no worker/disk (~$7/mo for always-on).
-Detail → `2026-11-02.md`.
+## MarketDesk — lessons worth keeping in the index
+Detail for all of these lives in `MARKETDESK.md`; the daily log is `2026-11-02.md`.
 
-## marketdesk: the inbound endpoint (2026-11-02, later)
-⭐ **A "web page" is not what makes hosting free — INBOUND traffic is.** A static
-page is free everywhere but serves files; the backend behind it has the same
-problem. What keeps a free host awake is a request ARRIVING: Render free sleeps
-after ~15 min without inbound traffic, and a **long poll is entirely OUTBOUND**,
-so polling could never wake a sleeping host — and the host sleeping would freeze
-the loop doing the polling. `desk daemon --web` serves `/health` (the ping that
-keeps it up) and a Telegram push route. The two Telegram transports are mutually
-exclusive (`getUpdates` is refused while a webhook is set), so `--web` is a MODE,
-not an addition. The per-update reply is ONE method (`handle_update`) shared by
-both, or the webhook becomes a silently diverging client. A forged POST is
-rejected in constant time BEFORE an action; a bad update answers 200, not 5xx, or
-Telegram redelivers it forever. And watch "configured ≠ working": I put
-`DESK_LEVEL_EVERY` in render.yaml before the CLI read it. Detail → `2026-11-02.md`.
-
-## marketdesk: watch what the desk said, not a typed list (2026-11-02, latest)
-`desk levels` watches the desk's own last plan (entry/stop/target) — and now ALSO
-its scenario triggers (breakout/breakdown), because **a desk that says "no trade"
-still prints scenarios**: a plan-only watcher goes silent exactly when the market
-is deciding something. The watched set is their UNION, deduped by price (two
-sources naming one shelf is noise, not emphasis). `DESK_WATCH_SCENARIOS=0`
-restores plan-only. ⭐ **Measure before calling it too expensive** — building the
-scenarios looked heavy for a 10s loop, measured at **5 ms** (read-only over
-shared memory, no agent/model); the cost was never the reason to skip it.
-⭐ **A token embedded in a git remote expires, and `git push` then HANGS on a
-password prompt** rather than failing: re-point with
-`git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/...`.
-Detail → `2026-11-02.md`.
-
-## Render free tier: the 750 hours are per WORKSPACE (2026-11-02)
-⭐ **750 free instance-hours are shared across ALL free services in a workspace,
-not 750 each.** One always-on service already spends 720-744 h (30-31 × 24); a
-second free service running even 20 h → 764 h → **Render suspends EVERY free
-service until next month**. So a "belt-and-braces" backup service is the failure
-it pretends to prevent. **Render Cron Jobs have no free tier** (~$1/mo min);
-only web services + static sites are free. **A blueprint that parses is not a
-blueprint that works** — validate the resource budget, not the syntax. A failure
-that is a *suspension* rather than an *exception* needs a test or it never shows
-up. **A GitHub Actions cron ping to `/health` replaces UptimeRobot for free** on
-a public repo (5-min cadence vs a 15-min sleep window = three chances).
-Bandwidth: Hobby dropped to **5 GB/mo** (Apr 2026); marketdesk needs ~0.6 GB.
-**marketdesk is NOT deployed to Render** — `render.yaml` existing ≠ deployed.
-Detail → `2026-11-02.md`.
-
-## GitHub Actions cron is best-effort — and a dropped tick looks healthy (2026-11-03)
-⭐ On this repo a `*/5` cron produced **2 scheduled runs in ~17 h** while every
-`workflow_dispatch` succeeded. GitHub docs: `schedule` is delayed under load and
-"some queued jobs may be dropped"; **`:00` is the most congested slot and moving
-off it is the only knob**. Offset every cron (`2-59/5`, `7-59/15`). This does
-**not** make cron reliable — for a hard cadence, an external scheduler must call
-`workflow_dispatch`. ⭐ **A dropped tick is an absence, not an error: nothing goes
-red.** Compare `created_at` against expected slots via the Actions API.
-⭐ **A dependency change must be verified in a CLEAN venv** — my pyyaml guard
-tests passed locally (pyyaml present) and broke CI (installed `.[dev]`, no
-pyyaml). ⭐ **Render response header `x-render-routing` names the real state:**
-`suspend-by-user` = suspended by owner (503), `no-server` = no such service (404).
-The live service is named **`marketdesk`**, not the blueprint's `marketdesk-daemon`.
-Detail → `2026-11-02.md`.
-
-**2026-11-04 — "التلغرام ما عم يشتغل" was a SLEEPING HOST, not a token.** Three
-layers, each of which alone looked like "the bot is broken":
-1. ⭐ **A dead webhook starves the bot.** Telegram serves updates to a webhook OR
-   `getUpdates`, never both. A registration left pointing at a sleeping host made
-   every poll die with a bare **HTTP 409** while `pending_updates` climbed (9) and
-   `last_error` said `502 Bad Gateway`. `desk.cli telegram` now takes
-   `--clear-webhook` (→ `TelegramBot.delete_webhook()`), exposed in
-   `marketdesk-bot.yml` as `clear_webhook`. **A dead webhook is worse than none.**
-2. ⭐ **The real cause: Render's free tier sleeps after ~15 min of no INBOUND
-   traffic.** The only inbound traffic is a Telegram push, which a quiet chat never
-   sends — so a quiet hour = sleep, and the next press hits a cold instance (or
-   Telegram's delivery 502s and retries). The daemon now **pings its own public
-   `/health`** (`Daemon._self_ping`, `DESK_PING_EVERY`, default 600s) — before the
-   market-session check (a closed market is when nothing else is inbound) and
-   included in `_next_due_in()` so the loop cannot sleep past its own keep-alive.
-   Failure is recorded, never fatal; `DESK_PING_EVERY=0` disables it.
-3. ⭐ **Never build a keep-alive on GitHub cron.** `marketdesk-keepawake.yml`
-   (a `3-59/5` cron) fired **twice in ~15 hours** — a 5-minute cron cannot hold a
-   15-minute window.
-- ⭐ **"The token works" ≠ "the owner sees the message".** `check-alerts` said
-  `getMe: ok` and `test send: delivered` while the chat looked dead. `desk.cli
-  telegram` now prints the configured chat via `getChat` (here: `private`,
-  `Almalek121`) so a chat_id pointing at the wrong chat cannot hide.
-- ⭐ **Secrets never reach a local shell here** — `getMe` returned 404 locally
-  because the harness injects secrets only into the command that STARTS a process.
-  Test the alert path from the cloud workflow, never locally.
-Detail → `2026-11-02.md`.
-- ⭐ **A currency tag is not a transmission channel.** A USD-tagged economic
-  release is not automatically a *dollar* event: `EIA Crude Oil Stocks Change`
-  is an oil-supply figure and must not vote on gold. The surprise agent scores a
-  curated allowlist and reports what it dropped — the same "whitelist, not
-  blacklist" rule the news agent uses for headlines. And the sign is per-release:
-  a higher Unemployment Rate / Jobless Claims WEAKENS the dollar (gold-positive),
-  the reverse of a payroll or PMI beat. **Never assume one sign for all releases.**
-- ⭐ **`actual=0.0` is a reading; a missing forecast is not a zero.** A calendar
-  row with no forecast has no surprise to measure → return `None`, not `0.0`
-  (0.0 claims "met expectations" when there was no expectation). No fresh print =
-  no vote, not a neutral zero averaged in.
-- **Audit for data stored but never read before adding anything.** `calendar.actual`
-  was fetched, stored, and read by no one; `tick_volume` is in every bar and every
-  `indicators.py` signature and used by no agent. The cheapest feature is often
-  already in the DB. (Surprise agent added 2026-11-02 → `2026-11-02.md`.)
-- ⭐ **Test the naive use of unused data before building on it — then find its
-  real home.** `tick_volume` as a *directional* signal failed (breakout on high
-  volume, n=8, 38%). As a *volatility* input it is real: 1h bar >1.2x its 20-bar
-  avg → 1.55x wider next range (Welch t=3.96, CI [1.25,1.91]), and **additive to
-  ATR** (partial r=+0.385; ATR alone only r=+0.13). It now widens the stop, never
-  picks a side — and only ever widens, since a quiet bar is the absence of a
-  signal, not a reason to tighten into noise.
-- ⭐ **A number and its verb are one fact.** A live line read "وسّعنا الوقف 0.90×"
-  (widened 0.90x) when 0.9x *tightens*. When code prints a magnitude with a
-  direction word, test the direction, not just the value.
-- **Test fixture trap:** marketdesk's `_wave()` repeats hour-of-day every 24 bars,
-  so `load_candles` collapses it to 24 hourly bars — editing the "last" raw bar
-  then does NOT change the last 1h bar. Space timestamps hourly when a test must
-  control the newest closed bar.
-- ⭐ **A deploy you cannot identify is a deploy you cannot trust.** The live
-  marketdesk service exposed no revision: `/health` was `{ok:true}` only, so a
-  green check could not distinguish new code from a stale build. It now reports
-  `RENDER_GIT_COMMIT[:12]` (Render's default env var) or `v<version>` off-Render.
-  One env var, one field — worth adding to any always-on service.
-- ⭐⭐ **When every outcome has the same sign, it is a bug, not a view.**
-  marketdesk was short 19/19, bias down 24/24, `trend` bear 56/56 (bull never),
-  and 0/13 plans reached target (-13R) — while gold ROSE 3%. Cause: `trend` and
-  `structure` took the price as `closes[-1]` (last CLOSED bar); on the daily that
-  is up to a day old (**3938 vs live 4065**, 127 pts off), compared against a
-  fresh EMA stack → a full-weight (8) bearish daily vote every run. It was one
-  bet placed 13 times, not 13 losses. ⭐ **A close is a fact about a closed bar,
-  not about now:** indicators read closed bars, but the price *compared against
-  them* must be `live_price()`. Grep `closes[-1]` in any agent. Fixed + 2 tests
-  proven to fail on the old code. Verdict went sell → no-trade.
-- ⭐ **A live call needs live data.** `gather()` survives a source outage by
-  reusing the DB — right for reading, wrong for alerting: a directional verdict
-  from a feed dead for hours is a stale number dressed as a signal. marketdesk
-  now gates only the ALERT on data age (`data_fresh()`, `DESK_MAX_DATA_AGE_S`
-  default 3h, measured from `fetched_at` so a quiet market is not "stale").
-  Reproduced by ageing readings + simulating an outage (verdict still came out).
-- ⭐ **Do not judge production by the sandbox's injected secret.** marketdesk's
-  Telegram token in the sandbox is malformed (35 chars, `getMe` 404), but the
-  GitHub secret is valid (len 46) and the bot is live (`chat: Almalek121`,
-  webhook). `check-alerts` locally lies; run `desk.cli telegram` from CI instead.
-- marketdesk **open risks (accepted, not fixed):** one data source (biquote, no
-  fallback); Actions cache is best-effort so a duplicate alert is possible after
-  eviction; the scoreboard mixes pre-fix (always-short) runs with post-fix ones.
-- ⭐ **Owner condition: keep the 10-year study OUT of my market analysis.**
-  Base reading/recommendation/scenarios ONLY on live desk output (9 agents, live
-  levels, scenarios, news). Never cite historical analogs, expectancy-R, n=47 or
-  any 10y stat; never run `desk gold`; never show `plan`'s hardcoded
-  `SIDE_EVIDENCE`. The desk's core (verdict + scenarios) was already study-free —
-  the study only surfaced via `gold`, `plan`'s frozen evidence, and `chart`.
+- ⭐ **A close is a fact about a closed bar, not about now.** Indicators read closed
+  bars; the price *compared against them* must be `live_price()`. Taking `closes[-1]`
+  (daily, up to a day old: 3938 vs live 4065) made `trend`/`structure` vote bear
+  56/56 while gold rose 3% — one bet placed 13×, not 13 losses.
+- ⭐ **When every outcome has the same sign, it is a bug, not a view.**
+- ⭐ **A live call needs live data.** Gate the ALERT on data age (`data_fresh()`,
+  `DESK_MAX_DATA_AGE_S` 3h, measured from `fetched_at` so a quiet market is not stale).
+- ⭐ **"Configured" is not "working"**; **a dead webhook is worse than none**; **"the
+  token works" ≠ "the owner sees the message"** (print the chat via `getChat`).
+- ⭐ **A currency tag is not a transmission channel.** Score a curated allowlist and
+  state what was dropped; the sign is per-release — never one sign for all.
+- **`actual=0.0` is a reading; a missing forecast is not a zero** → return `None`.
+- **Audit for data stored but never read before adding anything.**
+- ⭐ **"Alert once" is not "follow it".** `desk/active.py` holds the ONE plan in play
+  and reports only transitions (waiting→on_track→target/stopped/invalidated) + a
+  heartbeat; expires an unfired plan; drops one the fresh read contradicts. The
+  ledger fingerprint `symbol:verdict:score` let a COMPLETED plan suppress the next
+  same-direction trade forever → now `…:entry`. **The key was lying, not the code.**
+  Fresh-VM runner: `active_plan.json` rides the cached `marketdesk/data`.
+- ⭐ **Owner condition: keep the 10-year study OUT of my market analysis.** Base
+  reading/recommendation/scenarios ONLY on live desk output. Never cite historical
+  analogs, expectancy-R, n=47, or any 10y stat; never run `desk gold`.
+- **Open risks (accepted):** one data source (biquote); Actions cache is best-effort
+  (a duplicate alert is possible after eviction); scoreboard mixes pre/post-fix runs.
+- **`origin` had a stale embedded token** that hung `git push` on a password prompt;
+  fix = `git remote set-url origin https://${GITHUB_TOKEN}@github.com/...` +
+  `GIT_TERMINAL_PROMPT=0`.
