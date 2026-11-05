@@ -81,4 +81,7 @@ def render(run: Run, lang: str = "ar") -> str:
         L.append(f"  ⚠ تحذيرات: {'; '.join(r['warnings'])}")
     if r.get("errors"):
         L.append(f"  ⚠ أخطاء المصدر: {'; '.join(r['errors'])}")
+    active_line = r.get("active_plan_line")
+    if active_line:
+        L.append(active_line)
     return "\n".join(L)

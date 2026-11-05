@@ -391,6 +391,43 @@ def cmd_check_alerts(args) -> int:
     return 0
 
 
+def cmd_plan_status(args) -> int:
+    """Show the one plan the desk is following, and its status.
+
+    The desk alerts on status changes; this is the same view on demand, for when
+    the owner wants to know what is in play without waiting for a message.
+    """
+    import time
+
+    from . import active
+
+    s = _settings(args)
+    if args.clear:
+        active.clear(s)
+        print("active plan cleared — the desk will issue a fresh one on the next signal")
+        return 0
+    plan = active.load(s)
+    if plan is None:
+        print("no active plan — the desk is watching for a fresh signal")
+        return 0
+    live = None
+    try:
+        from . import sources
+        live = float(sources.fetch_quote(s.symbol)["mid"])
+    except Exception:  # noqa: BLE001 - a dead feed must not hide the stored plan
+        pass
+    print(f"active plan: {plan.direction}  entry {plan.entry:,.2f}  "
+          f"stop {plan.stop:,.2f}  target {plan.target:,.2f}")
+    print(f"issued {time.strftime('%Y-%m-%d %H:%M', time.gmtime(plan.issued_at))} UTC "
+          f"· run {plan.run_id}")
+    if live is not None:
+        status = plan.evaluate(live, expiry_s=s.plan_expiry_s)
+        print(f"live {live:,.2f} → status {status}")
+    else:
+        print(f"stored status {plan.status} (live quote unavailable)")
+    return 0
+
+
 def _menu_text(settings) -> str:
     from .actions import Actions
     return Actions(settings).menu_text()
@@ -617,6 +654,11 @@ def main(argv=None) -> int:
     ca.add_argument("--send", action="store_true",
                     help="also deliver a test message to the chat")
     ca.set_defaults(func=cmd_check_alerts)
+
+    ps = sub.add_parser("plan-status", help="show the plan currently being followed")
+    ps.add_argument("--symbol", default=None)
+    ps.add_argument("--clear", action="store_true", help="forget the active plan")
+    ps.set_defaults(func=cmd_plan_status)
 
     b = sub.add_parser("bot", help="one poll pass: answer button presses")
     b.add_argument("--symbol", default=None)

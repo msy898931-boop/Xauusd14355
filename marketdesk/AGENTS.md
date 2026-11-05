@@ -79,6 +79,13 @@ python3 -m ruff check .             # lint
 19. **mypy must stay clean** (`python3 -m mypy desk --ignore-missing-imports`).
     It caught a real shadowing bug in `correlation.py` (`summary` used as both a
     dict and a string) that no test covered.
+20. **A plan, once issued, is followed — not re-issued.** `desk/active.py` holds
+    the one plan in play; `watch_once` reports only its transitions (`waiting` →
+    `on_track` → `target`/`stopped`/`invalidated`), plus a heartbeat while it runs.
+    Never re-alert the direction on a later pass — the ledger and the active plan
+    both exist so the owner hears what *changed*. A plan that never fires expires;
+    a plan the fresh read contradicts is dropped and said so; a finished plan is
+    cleared.
 
 ## Environment quirks
 - **Groq sits behind Cloudflare and rejects urllib's default User-Agent with

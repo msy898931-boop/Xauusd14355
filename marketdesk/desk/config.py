@@ -107,6 +107,17 @@ class Settings:
     # hourly bar and a best-effort schedule never trip it, narrow enough to catch
     # an outage before the desk acts on it.
     max_data_age_s: float = float(os.environ.get("DESK_MAX_DATA_AGE_S", str(3 * 3600)))
+    # How often to re-send "the plan is still on track" while it runs. A change
+    # of status is always sent; this is the quiet reassurance in between, so the
+    # owner knows the desk is still watching rather than asleep.
+    plan_heartbeat_s: float = float(os.environ.get("DESK_PLAN_HEARTBEAT_S",
+                                                   str(2 * 3600)))
+    # How long a plan may sit unfilled before it is abandoned. A trigger that has
+    # not fired in a day is not a plan any more -- the market has moved on and
+    # the level is stale. Only applies while `waiting`; a filled plan runs until
+    # its stop or target.
+    plan_expiry_s: float = float(os.environ.get("DESK_PLAN_EXPIRY_S",
+                                                str(24 * 3600)))
     # A setup is only worth stating if reward exceeds risk by this factor. A plan
     # whose nearest target sits closer than the stop is a losing proposition even
     # when the direction is right.

@@ -157,7 +157,7 @@ it. If no real level clears the bar, the desk states no plan rather than a losin
 one — and a projection is used only when there is no structure on that side at
 all, tagged as the weakest kind.
 
-## Eight rules the desk holds itself to
+## Nine rules the desk holds itself to
 
 These are not style preferences; each one was a real defect found by measurement.
 
@@ -202,6 +202,16 @@ These are not style preferences; each one was a real defect found by measurement
    alerting — so the alert gate checks the age of the newest reading
    (`DESK_MAX_DATA_AGE_S`, default 3h) and stays silent if it is old. A merely
    quiet market is not stale: age is measured from the fetch time, not the bar.
+9. **A plan, once issued, is followed — not re-issued.** Repeating a direction
+   every fifteen minutes is not a signal, it is noise; a holder of the call needs
+   to hear what *changed*. So the desk remembers the one plan in play
+   (`desk/active.py`) and reports only its transitions: `waiting` (trigger not
+   fired), `on_track` (filled, heading for the target), `target`, `stopped`,
+   `invalidated`. An unchanged `on_track` is re-sent only on a heartbeat
+   (`DESK_PLAN_HEARTBEAT_S`, default 2h) — "still running", not the direction
+   again. A plan that never fires expires (`DESK_PLAN_EXPIRY_S`, default 24h),
+   and a plan the desk's own fresh read now contradicts is dropped and said so.
+   A finished plan is cleared, never followed forever.
 
 ## When the model is unavailable
 

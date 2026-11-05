@@ -377,6 +377,13 @@ class Orchestrator:
         rec["gather"] = gather
         rec["errors"] = errors
         rec["llm"] = self.llm.stats()
+        # A plan in play is part of the picture: a reader must know the desk is
+        # already following a call before they read a fresh "no trade".
+        from . import active as _active
+        _plan = _active.load(self.settings)
+        _live = self._live_price_from_rec(rec)
+        if _plan is not None and _live is not None:
+            rec["active_plan_line"] = _active.one_line(_plan, _live)
         duration = time.time() - started
         run = Run(run_id, self.settings.symbol, started, studies, verdict, score,
                   rec, errors, duration)
@@ -400,7 +407,14 @@ class Orchestrator:
             return False, why
         if abs(run.score) < self.settings.alert_score:
             return False, f"conviction {run.score:+.2f} below {self.settings.alert_score}"
-        fp = f"{run.symbol}:{run.verdict}:{round(run.score, 1)}"
+        # The fingerprint names the TRADE, not the opinion. Keying it on
+        # direction+score alone meant a plan that completed could suppress the
+        # *next* trade of the same direction and conviction forever. Including
+        # the trigger means a genuinely new setup alerts, while the same one
+        # re-printed on the next pass does not.
+        entry = run.recommendation.get("entry")
+        fp = (f"{run.symbol}:{run.verdict}:{round(run.score, 1)}"
+              f":{round(float(entry), 2) if entry is not None else 'x'}")
         return True, fp
 
     def data_fresh(self) -> tuple[bool, str]:
@@ -443,7 +457,13 @@ class Orchestrator:
         is written only on demand then a busy week leaves the record empty, and an
         empty record cannot tell a good call from a lucky one. It reads candles
         already in shared memory, so it costs no network call.
+
+        The alert answers a different question than "is there a new signal": a
+        plan, once issued, is *followed*. The status of the active plan is
+        reported on every pass -- but only when it changes, or on the heartbeat,
+        so the owner hears "still running" rather than the same direction again.
         """
+        from . import active
         from .notify import Notifier, SignalLedger
         from .scoreboard import Grader
 
@@ -457,10 +477,22 @@ class Orchestrator:
                                  if board.expectancy_r is not None else None)}
         except Exception as exc:  # noqa: BLE001 - grading must never block an alert
             graded = {"error": exc.__class__.__name__}
+        out: dict[str, object] = {"run_id": run.run_id, "verdict": run.verdict,
+                                  "score": round(run.score, 3), "alerted": False,
+                                  "reason": "", "graded": graded}
+        n = notifier or Notifier(self.settings)
+        live = self._live_price(run)
+
+        # 1) Follow the plan already in play. This runs before the new-signal
+        # check: a running plan is the thing the owner is holding.
+        tracked = self._follow_active_plan(live, n, run)
+        if tracked is not None:
+            out.update(tracked)
+            return out
+
+        # 2) No active plan -- consider issuing a new one.
         ok, detail = self.actionable(run)
-        out = {"run_id": run.run_id, "verdict": run.verdict,
-               "score": round(run.score, 3), "alerted": False, "reason": detail,
-               "graded": graded}
+        out["reason"] = detail
         if not ok:
             return out
 
@@ -468,11 +500,82 @@ class Orchestrator:
         if ledger.seen(detail):
             out["reason"] = "already alerted"
             return out
-        n = notifier or Notifier(self.settings)
         from .report import render
         sent = n.send(render(run, lang="ar"))
         if sent:
             ledger.record(detail, run.run_id)
+            plan = active.adopt(self.settings, run.recommendation, run.run_id)
+            if plan is not None:
+                out["active"] = plan.status
         out["alerted"] = sent
         out["reason"] = "alerted" if sent else "alert not configured/failed"
         return out
+
+    def _live_price(self, run: Run) -> float | None:
+        """The price to judge the active plan against: the run's own quote when
+        it has one, else the last quote in shared memory."""
+        return self._live_price_from_rec(run.recommendation)
+
+    def _live_price_from_rec(self, rec: dict) -> float | None:
+        q = (rec.get("gather") or {}).get("quote") or {}
+        if isinstance(q.get("mid"), (int, float)):
+            return float(q["mid"])
+        row = self.shared.load_quote(self.settings.symbol) or {}
+        if isinstance(row.get("mid"), (int, float)):
+            return float(row["mid"])
+        return None
+
+    def _follow_active_plan(self, live: float | None, notifier, run: Run) -> dict | None:
+        """Report the active plan's status. Returns None when there is no plan.
+
+        Only a CHANGE is sent, plus a heartbeat so a quiet-but-alive plan is not
+        mistaken for a dead desk. A terminal status is sent once and then the
+        plan is cleared, so a finished call is not followed forever.
+
+        A second kind of change matters while the plan is still `waiting`: the
+        desk's own fresh read may have flipped against it. A breakout that has
+        not fired, on a day the desk now leans the other way, is a setup going
+        cold -- the owner is told, and the stale plan is dropped.
+        """
+        from . import active
+
+        plan = active.load(self.settings)
+        if plan is None or live is None:
+            return None
+        now = time.time()
+        new = plan.evaluate(live, now=now, expiry_s=self.settings.plan_expiry_s)
+        changed = new != plan.status
+        due = (now - plan.heartbeat_at) >= self.settings.plan_heartbeat_s
+        flipped = (new == "waiting" and self._plan_contradicted(plan, run))
+        plan.status = new
+        plan.updated_at = now
+        if changed or flipped or (new == "on_track" and due):
+            if flipped:
+                text = active.contradiction_message(plan, live, run.verdict)
+            else:
+                text = active.message(plan, live)
+            sent = notifier.send(text)
+            if sent:
+                plan.heartbeat_at = now
+                if plan.is_terminal() or flipped:
+                    active.clear(self.settings)
+                else:
+                    active.save(self.settings, plan)
+            reason = f"plan {new}"
+            if flipped:
+                reason = f"plan {new} (contradicted by fresh {run.verdict})"
+            return {"active": new, "alerted": sent,
+                    "reason": reason if sent else reason + " (send failed)"}
+        if plan.is_terminal():
+            active.clear(self.settings)
+        return {"active": new, "alerted": False, "reason": f"plan {new} (no change)"}
+
+    @staticmethod
+    def _plan_contradicted(plan, run: Run) -> bool:
+        """Whether the desk's fresh verdict is against an unfilled plan.
+
+        Only a decisive opposite call counts: `no-trade` is silence, not a
+        reversal, and treating it as one would abandon a good plan on a quiet
+        day. The plan's own direction must still be the one the desk backs.
+        """
+        return run.verdict in ("long", "short") and run.verdict != plan.direction

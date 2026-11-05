@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 
 import pytest
 
@@ -58,6 +59,12 @@ def _settings(tmp_path):
     s.timeframes = ("1d", "4h", "1h")
     s.peers = ()
     return s
+
+
+def _stub_run(s, *, verdict="no-trade", score=0.0, rec=None):
+    """A Run with no agents, for tests that only exercise the watch loop."""
+    from desk.orchestrator import Run
+    return Run("stub", s.symbol, time.time(), [], verdict, score, rec or {})
 
 
 # ---- indicators -------------------------------------------------------
@@ -438,6 +445,194 @@ def test_actionable_refuses_to_alert_on_stale_data(tmp_path):
     assert "قديمة" in reason or "stale" in reason.lower()
 
 
+# ---- the active plan: follow one call, report only what changes --------
+
+def test_active_plan_fills_and_follows_its_lifecycle(tmp_path):
+    """A breakout plan is `waiting` until price crosses the trigger, then
+    `on_track`; before it fills, touching the stop is a dead setup, not a loss."""
+    from desk import active
+
+    s = _settings(tmp_path)
+    p = active.adopt(s, {"direction": "long", "entry": 4150.0, "stop": 4113.0,
+                         "targets": [{"level": 4184.0}]}, "r1", now=1000.0)
+    assert p.status == "waiting"
+    assert p.evaluate(4140, now=1000) == "waiting"      # not filled yet
+    assert p.evaluate(4100, now=1000) == "invalidated"  # died before filling
+    assert p.evaluate(4155, now=1000) == "on_track"     # filled
+    p.status = "on_track"
+    assert p.evaluate(4190, now=1000) == "target"
+    assert p.evaluate(4100, now=1000) == "stopped"
+
+
+def test_active_plan_short_side_is_mirrored(tmp_path):
+    from desk import active
+
+    s = _settings(tmp_path)
+    p = active.adopt(s, {"direction": "short", "entry": 3900.0, "stop": 3937.0,
+                         "targets": [{"level": 3866.0}]}, "r1", now=1000.0)
+    assert p.evaluate(3910, now=1000) == "waiting"
+    assert p.evaluate(3940, now=1000) == "invalidated"
+    assert p.evaluate(3890, now=1000) == "on_track"
+    p.status = "on_track"
+    assert p.evaluate(3860, now=1000) == "target"
+    assert p.evaluate(3940, now=1000) == "stopped"
+
+
+def test_active_plan_expires_while_waiting(tmp_path):
+    """A trigger that never fires is a level the market has left behind. A plan
+    that sits unfilled past the expiry is abandoned, not followed forever."""
+    from desk import active
+
+    s = _settings(tmp_path)
+    p = active.adopt(s, {"direction": "long", "entry": 4150.0, "stop": 4113.0,
+                         "targets": [{"level": 4184.0}]}, "r1", now=1000.0)
+    day = 24 * 3600
+    assert p.evaluate(4140, now=1000 + day - 10, expiry_s=day) == "waiting"
+    assert p.evaluate(4140, now=1000 + day + 10, expiry_s=day) == "invalidated"
+
+
+def test_active_plan_round_trips_through_disk(tmp_path):
+    from desk import active
+
+    s = _settings(tmp_path)
+    active.adopt(s, {"direction": "long", "entry": 4150.0, "stop": 4113.0,
+                     "targets": [{"level": 4184.0}]}, "r1", now=1000.0)
+    got = active.load(s)
+    assert got is not None and got.entry == 4150.0 and got.status == "waiting"
+    active.clear(s)
+    assert active.load(s) is None
+
+
+def test_adopt_ignores_a_non_tradeable_recommendation(tmp_path):
+    """`no trade` is not a plan to follow: no direction, no entry, no target."""
+    from desk import active
+
+    s = _settings(tmp_path)
+    assert active.adopt(s, {"direction": "no-trade"}, "r1") is None
+    assert active.adopt(s, {"direction": "long", "entry": None, "stop": 1.0,
+                            "targets": [{"level": 2.0}]}, "r1") is None
+    assert active.adopt(s, {"direction": "long", "entry": 1.0, "stop": 2.0,
+                            "targets": []}, "r1") is None
+
+
+def test_watch_once_follows_the_plan_and_reports_only_changes(tmp_path, monkeypatch):
+    """Once a plan is in play the watcher reports its STATUS, not the direction
+    again: a change is always sent, an unchanged `on_track` waits for the
+    heartbeat. A finished plan is cleared."""
+    from desk import active
+
+    s = _settings(tmp_path)
+    desk = Orchestrator(s)
+    sent: list[str] = []
+    monkeypatch.setattr(desk, "run", lambda now=None: _stub_run(s))
+    desk.settings.plan_heartbeat_s = 3600.0
+
+    class _N:
+        def send(self, text):
+            sent.append(text)
+            return True
+
+    # Fill the plan and put it on track.
+    active.adopt(s, {"direction": "long", "entry": 4150.0, "stop": 4113.0,
+                     "targets": [{"level": 4184.0}]}, "r1", now=time.time())
+    p = active.load(s)
+    p.status = "on_track"
+    p.heartbeat_at = time.time()          # just heard from it
+    active.save(s, p)
+
+    monkeypatch.setattr(desk, "_live_price", lambda run: 4160.0)   # still on track
+    out = desk.watch_once(notifier=_N())
+    assert out["active"] == "on_track" and out["alerted"] is False
+    assert sent == [], "an unchanged on_track must not re-send before the heartbeat"
+
+    # A real change -- price reached the target -- is sent and then cleared.
+    monkeypatch.setattr(desk, "_live_price", lambda run: 4190.0)
+    out = desk.watch_once(notifier=_N())
+    assert out["active"] == "target" and out["alerted"] is True
+    assert len(sent) == 1 and "الهدف" in sent[0]
+    assert active.load(s) is None, "a finished plan must not be followed forever"
+
+
+def test_watch_once_sends_a_heartbeat_for_a_running_plan(tmp_path, monkeypatch):
+    """`on_track` unchanged is re-sent once the heartbeat is due, so the owner
+    knows the desk is still watching rather than asleep."""
+    from desk import active
+
+    s = _settings(tmp_path)
+    desk = Orchestrator(s)
+    sent: list[str] = []
+    monkeypatch.setattr(desk, "run", lambda now=None: _stub_run(s))
+    desk.settings.plan_heartbeat_s = 60.0
+
+    class _N:
+        def send(self, text):
+            sent.append(text)
+            return True
+
+    active.adopt(s, {"direction": "long", "entry": 4150.0, "stop": 4113.0,
+                     "targets": [{"level": 4184.0}]}, "r1", now=time.time())
+    p = active.load(s)
+    p.status = "on_track"
+    p.heartbeat_at = time.time() - 120     # overdue
+    active.save(s, p)
+
+    monkeypatch.setattr(desk, "_live_price", lambda run: 4160.0)
+    out = desk.watch_once(notifier=_N())
+    assert out["alerted"] is True and len(sent) == 1
+    assert "مكملة" in sent[0] or "رايحة" in sent[0]
+
+
+def test_the_alert_fingerprint_names_the_trade_not_the_opinion(tmp_path):
+    """Keying the ledger on direction+score alone meant a plan that completed
+    could suppress the *next* trade of the same direction and conviction forever.
+    The trigger is part of the key, so a genuinely new setup alerts."""
+    s = _settings(tmp_path)
+    desk = Orchestrator(s)
+    a = _stub_run(s, verdict="long", score=0.5,
+                  rec={"entry": 4150.0, "stop": 4113.0, "targets": [{"level": 4184.0}]})
+    b = _stub_run(s, verdict="long", score=0.5,
+                  rec={"entry": 4200.0, "stop": 4160.0, "targets": [{"level": 4240.0}]})
+    _, fp_a = desk.actionable(a)
+    _, fp_b = desk.actionable(b)
+    assert fp_a != fp_b, "a different trigger must be a different trade"
+    _, fp_a2 = desk.actionable(a)
+    assert fp_a2 == fp_a, "the same trigger must not re-alert"
+
+
+def test_watch_once_drops_a_plan_the_fresh_read_contradicts(tmp_path, monkeypatch):
+    """A breakout that has not fired, on a day the desk's own fresh read now
+    leans the other way, is a setup going cold. The owner is told, and the stale
+    plan is dropped. `no-trade` is silence, not a reversal, and must NOT drop it.
+    """
+    from desk import active
+
+    s = _settings(tmp_path)
+    desk = Orchestrator(s)
+    sent: list[str] = []
+
+    class _N:
+        def send(self, text):
+            sent.append(text)
+            return True
+
+    active.adopt(s, {"direction": "long", "entry": 4150.0, "stop": 4113.0,
+                     "targets": [{"level": 4184.0}]}, "r1", now=time.time())
+    monkeypatch.setattr(desk, "_live_price", lambda run: 4140.0)   # still waiting
+
+    # A quiet day: the desk says no-trade. The plan is untouched.
+    monkeypatch.setattr(desk, "run", lambda now=None: _stub_run(s, verdict="no-trade"))
+    out = desk.watch_once(notifier=_N())
+    assert out["active"] == "waiting" and sent == []
+    assert active.load(s) is not None
+
+    # The desk now backs the other side. The waiting plan is dropped.
+    monkeypatch.setattr(desk, "run", lambda now=None: _stub_run(s, verdict="short"))
+    out = desk.watch_once(notifier=_N())
+    assert "contradicted" in out["reason"] and out["alerted"] is True
+    assert len(sent) == 1 and "تغيّر الوضع" in sent[0]
+    assert active.load(s) is None
+
+
 def test_levels_from_scenarios_watch_the_triggers_the_desk_printed(tmp_path):
     """The scenario triggers must become watchable levels, on the correct side.
 
@@ -555,7 +750,11 @@ def test_watch_once_does_not_alert_when_signal_repeats(tmp_path, monkeypatch):
     assert first["verdict"] == "short"
     assert first["alerted"] is True
     assert len(fake.sent) == 1
-    assert second["alerted"] is False and second["reason"] == "already alerted"
+    # The second pass must not re-alert. It now reports the plan it adopted --
+    # still waiting for its trigger -- rather than the direction again.
+    assert second["alerted"] is False
+    assert second["reason"].startswith("plan ")
+    assert len(fake.sent) == 1
 
 
 def test_watch_once_retries_when_send_fails(tmp_path, monkeypatch):
