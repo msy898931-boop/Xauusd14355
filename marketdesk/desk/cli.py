@@ -283,6 +283,20 @@ def cmd_plan(args) -> int:
     return 0
 
 
+def cmd_bias(args) -> int:
+    """Audit the desk's own decision rule for a structural lean.
+
+    Replays the structure/trend/momentum votes over the shipped ten-year file
+    and reports the long/short/no-trade split. The desk looked short-biased
+    across 69 live runs; this says whether that was the market or the code.
+    """
+    from .bias import audit_symbol, render
+
+    b = audit_symbol(args.symbol or "XAUUSD")
+    print(render(b, args.symbol or "XAUUSD"))
+    return 0
+
+
 def cmd_scan(args) -> int:
     """Ask the prior question: is there any edge in the data at all?
 
@@ -619,7 +633,7 @@ def cmd_telegram(args) -> int:
     return 0 if url else 1
 
 
-def main(argv=None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="desk", description="MarketDesk multi-agent analysis")
     p.add_argument("--symbol", default=None, help="instrument (default XAUUSD)")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -701,6 +715,10 @@ def main(argv=None) -> int:
     sc.add_argument("--csv", default="../biquote/XAUUSD_1d.csv",
                     help="daily bar CSV to scan")
     sc.set_defaults(func=cmd_scan)
+
+    bs = sub.add_parser("bias", help="audit the desk's own rule for a structural lean")
+    bs.add_argument("--symbol", default=None)
+    bs.set_defaults(func=cmd_bias)
 
     bt = sub.add_parser("backtest", help="grade the method on stored daily bars")
     bt.add_argument("--symbol", default=None)
@@ -790,6 +808,11 @@ def main(argv=None) -> int:
                          "transport) works again; use when a dead host left one")
     tg.set_defaults(func=cmd_telegram)
 
+    return p
+
+
+def main(argv=None) -> int:
+    p = build_parser()
     args = p.parse_args(argv)
     return args.func(args)
 

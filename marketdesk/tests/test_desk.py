@@ -1218,6 +1218,55 @@ def test_analog_is_registered_in_the_roster():
     assert ROSTER[0] is AnalogAgent
 
 
+# ---- bias audit -------------------------------------------------------
+
+def test_bias_audit_finds_a_fair_rule_on_a_rising_market(tmp_path):
+    """On a market that rose, a structurally fair engine must lean LONG.
+
+    The desk looked short-biased live; this proves the lean was the market and
+    not the rule. A synthetic uptrend is the cleanest case: the rule must not
+    be short on it."""
+    from desk import bias
+
+    C = [{"o": 1000 + i, "h": 1002 + i, "l": 998 + i, "c": 1000 + i}
+         for i in range(600)]
+    b = bias.audit(C)
+    assert b.bars > 400
+    assert b.long_share > b.short_share
+    assert b.balanced
+
+
+def test_bias_audit_flags_a_rule_that_always_shorts():
+    """A rule that only ever shorts must fail the audit. This is the guard the
+    live desk needed: it is not enough to *look* at the counts, the audit has to
+    be able to say 'this is broken'."""
+    from desk import bias
+
+    b = bias.Balance(long=0, short=900, no_trade=100, bars=1000,
+                     votes={"structure": {1: 0, 0: 0, -1: 900}})
+    assert b.balanced is False
+    assert "انحياز" in b.summary_ar()
+
+
+def test_bias_audit_reads_only_the_shipped_history():
+    """The audit must run on the file the desk ships, and its own counts must
+    add up to the bars it examined."""
+    from desk import bias
+
+    b = bias.audit_symbol("XAUUSD")
+    assert b.bars > 2000
+    assert b.long + b.short + b.no_trade == b.bars
+    for t in b.votes.values():
+        assert sum(t.values()) == b.bars
+
+
+def test_bias_audit_is_wired_to_the_cli():
+    from desk.cli import build_parser
+    p = build_parser()
+    ns = p.parse_args(["bias"])
+    assert ns.func.__name__ == "cmd_bias"
+
+
 # ---- measured correlation ---------------------------------------------
 
 def test_pearson_measures_real_comovement():
