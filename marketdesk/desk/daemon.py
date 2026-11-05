@@ -145,9 +145,12 @@ class Daemon:
         self.last_ping = float("-inf")
         # The daily map keys on the wall-clock date, not a monotonic interval:
         # "once a day" is a calendar fact, and a monotonic counter would drift
-        # across a restart or a clock step. Read from disk, not just memory: the
-        # host restarts the process on every deploy, and an in-memory date would
-        # re-send the map each time. None means "nothing sent yet".
+        # across a restart or a clock step. Read from disk, not just memory, so a
+        # process RESTART does not re-send the map. It does NOT survive a deploy
+        # on a host with ephemeral storage (Render free mounts DESK_HOME at /tmp,
+        # wiped per container), so a deploy costs at most one duplicate map --
+        # accepted, because a duplicate the owner wants beats a missing one.
+        # None means "nothing sent yet".
         self.last_map_date: str | None = _load_map_date(settings)
         self.maps = 0
         self._stop = False
