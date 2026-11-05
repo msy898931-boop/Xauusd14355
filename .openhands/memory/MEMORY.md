@@ -103,7 +103,9 @@ Detail for all of these lives in `MARKETDESK.md`; the daily log is `2026-11-02.m
 - ⭐ **A live call needs live data.** Gate the ALERT on data age (`data_fresh()`,
   `DESK_MAX_DATA_AGE_S` 3h, measured from `fetched_at` so a quiet market is not stale).
 - ⭐ **"Configured" is not "working"**; **a dead webhook is worse than none**; **"the
-  token works" ≠ "the owner sees the message"** (print the chat via `getChat`).
+  token works" ≠ "the owner sees the message"** (print the chat via `getChat`). The
+  session-local `TELEGRAM_BOT_TOKEN` here is 35 chars/no colon → `getMe` 404 while
+  the repo secret is a valid 46-char token; only `getMe` proves a token.
 - ⭐ **A currency tag is not a transmission channel.** Score a curated allowlist and
   state what was dropped; the sign is per-release — never one sign for all.
 - **`actual=0.0` is a reading; a missing forecast is not a zero** → return `None`.
@@ -138,3 +140,19 @@ Detail for all of these lives in `MARKETDESK.md`; the daily log is `2026-11-02.m
   to nearest when nothing fits). Adding a limit is half the job; the search must be
   able to produce something inside it.
 
+
+## MarketDesk — later lessons (2026-11-05)
+
+- ⭐ **A metric too bad to be true must be checked, not "fixed".** The board read
+  **0/16 plans, -1.00R**; it looked like a grader bug, but tracing the raw plans
+  showed the desk was short while gold rallied ~5% and was stopped out 16 times.
+  The "fix" would have relabelled every loss `unfilled` — the same sin as grading
+  direction-only. Verify against the data before touching the metric.
+- **Two entry semantics, deliberately:** `scenarios.py` `entry` = a **breakout
+  trigger**; `recommendation.entry` = **market entry at the current price**
+  (`mid@issue == entry`). Fill logic must handle both or it hides losses.
+- ⭐ **An alert must carry the trade, not just the level.** `Level` has
+  `call_side/stop/target/why`; a level clearing the desk's R:R floor (1.5) renders
+  `🟢 اشترِ — stop, target, R:R, why`, else it stays a silent marker (never invent
+  conviction). `from_scenarios` must get the owner's window + account, or the
+  alert's stop won't match sizing.
