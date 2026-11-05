@@ -130,4 +130,11 @@ Detail for all of these lives in `MARKETDESK.md`; the daily log is `2026-11-02.m
   up), refuses an unsizeable setup **with the number that proves it**, and takes a
   hard `DESK_MAX_STOP_POINTS` cap. `desk account` shows it; `DESK_BALANCE=0` keeps
   points-only. **A stop is not a risk until it meets a lot size and a balance.**
+- ⭐ **A tolerance the desk cannot satisfy is a tolerance it refuses forever.** The
+  owner's stop window (10-15 pts) is *exactly* the 15m/30m ATR band (measured:
+  5m 5.7 · 15m 10.5 · 30m 14.7 · 1h 20.2 · 4h 36.9 · 1d 72.3) — the stop IS the
+  frame ATR, so the desk had to reach down to those frames AND prefer the level
+  whose frame fits the window over a nearer one it would only refuse (falling back
+  to nearest when nothing fits). Adding a limit is half the job; the search must be
+  able to produce something inside it.
 
