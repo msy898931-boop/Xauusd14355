@@ -210,6 +210,17 @@ Detail for all of these lives in `MARKETDESK.md`; the daily log is `2026-11-02.m
   `gold`). The plan card now prints the study's **verdict** (supported / not) but
   no reach %, no n, no control baseline. Nothing deleted — a display switch.
 - Suite: **291 passed**; mypy clean (50 files); ruff clean.
+- ⭐ **A level's side is where it SITS, not what pivot it was.** The map tagged
+  liquidity "above"/"below" by swing-high vs swing-low; once price trades past a
+  level the two disagree and the map states the opposite of what it measured (3
+  of 4 live levels wrong). Label from the price, after the positional filter. And
+  the regression test must be **directional** — a symmetric zig-zag passes on the
+  broken code, so the test, not the code, was the bug.
+- ⭐ **A number typed into a render rots.** The chart generator carried literal
+  level lists and a literal "NFP in ~5 hours" alert, still showing the 4,052-4,083
+  shelf hours after price left it. Zones now come from `map.build`, setups from
+  `scenarios.build`, the event from the calendar. Two shapes to watch:
+  `map.build` reads shared-memory bars, `scenarios.build` reads the agent shape.
 - ⭐ **A trade without a stop cannot be graded, so it is not a record.** Added
   `desk journal add|close|grade` (`desk/journal.py`, `4293b00`) — the owner's own
   trades, measured the desk's way: **first touch wins, a bar spanning both takes
