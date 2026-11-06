@@ -62,6 +62,21 @@ def test_expectancy_is_reported_in_r_not_points(j: Journal) -> None:
     assert st["profit_factor"] == pytest.approx(2.34, abs=0.01)
 
 
+def test_a_trade_recorded_after_the_fact_grades_on_history(j: Journal) -> None:
+    """A trade is usually written down after it happened. `opened_at` puts it in
+    the past so `grade` walks the real bars instead of finding an empty window."""
+    j.add("XAUUSD", "long", 4063.0, 4055.0, 4073.0, opened_at="2026-11-06T08:25:00Z")
+    bars = [
+        {"open_time": "2026-11-06T08:20:00Z", "high": 4070.53, "low": 4065.31},
+        {"open_time": "2026-11-06T08:25:00Z", "high": 4068.82, "low": 4063.06},
+        {"open_time": "2026-11-06T08:45:00Z", "high": 4074.14, "low": 4070.53},
+    ]
+    assert j.grade({"5m": bars}, tf="5m") == 1
+    t = j.all_trades()[0]
+    assert t.result == "target"
+    assert t.r_multiple == pytest.approx(1.25, abs=0.01)
+
+
 def test_manual_close_is_comparable_to_an_automatic_one(j: Journal) -> None:
     tid = j.add("XAUUSD", "long", 4055.0, 4048.0, 4083.0)
     assert j.close_manual(tid, 4063.0) is True
