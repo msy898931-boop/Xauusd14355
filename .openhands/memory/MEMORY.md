@@ -200,11 +200,13 @@ Detail for all of these lives in `MARKETDESK.md`; the daily log is `2026-11-02.m
   for a username and hangs. Push with the injected token inline:
   `git push "https://x-access-token:${GITHUB_TOKEN}@github.com/<o>/<r>.git" main:main`,
   then `git fetch <same-url> main:refs/remotes/origin/main` to sync the tracking ref.
-- ⚠ **Standing owner condition vs. this task's acceptance criteria.** The owner
-  said keep the 10-year study OUT of *my* market reading / recommendations /
-  scenarios (don't cite n=47, expectancy-R, 10y stats). But Section 6 of the plan
-  the owner asked for *requires* study-based validation (walk-forward edge,
-  calibration). Reconciliation: study is fine as **validation/dev tooling**
-  (`desk acceptance`, `walkforward`, `calibration`); the tension is that the plan
-  card now *prints* measured reach %. Flag it, don't silently decide.
-- Suite: **284 passed**; mypy clean (49 files); ruff clean.
+- ⚠ **Standing owner condition vs. this task's acceptance criteria — RESOLVED.**
+  The owner said keep the 10-year study OUT of the market reading / plan /
+  recommendations / scenarios. Section 6 of the plan the owner asked for still
+  *requires* study-based validation (walk-forward edge, calibration). Resolution
+  (`b6f0bed`): one flag, `Settings.show_study` (`DESK_SHOW_STUDY`, default OFF),
+  gates every study statistic on every live surface; the study lives on as
+  **validation/dev tooling** (`desk acceptance`, `walkforward`, `calibration`,
+  `gold`). The plan card now prints the study's **verdict** (supported / not) but
+  no reach %, no n, no control baseline. Nothing deleted — a display switch.
+- Suite: **286 passed**; mypy clean (49 files); ruff clean.
