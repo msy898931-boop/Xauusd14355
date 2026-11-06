@@ -257,3 +257,15 @@ Detail for all of these lives in `MARKETDESK.md`; the daily log is `2026-11-02.m
   refuses a missing stop. `data/journal.db` is git-ignored (private, not the
   blackboard). mypy caught 4 real `float | None` bugs here — the checker is a test
   the tests do not run.
+- ⭐ **The log must judge the PLAN at the moment it is written, not the week
+  after.** The desk refuses its own setups below `min_rr` (1.5), but the owner's
+  trades entered the journal unexamined — three of four shorts planned to risk 8
+  points to make 5, and the week still read as a clean 7/7 (+$56, +6.87R). Under
+  1R a trade needs a win rate above 50% just to break even, so `weak_reward`
+  (planned_r < 1) now marks the line, `journal add` prints the arithmetic and the
+  fix, and the report counts them and names the worst — closed **or not**, because
+  a weak plan is a fact about the plan, not about the settled record. And
+  `Trade.money` returns **None** when the size was never recorded, never a guess:
+  a report that silently drops half the money reads as if that half did not
+  happen. `journal size <id> --size N` fills it in later. (One lot = 100 oz, so
+  0.01 lot = $1/point — the owner's size.)
