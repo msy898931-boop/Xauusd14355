@@ -176,3 +176,40 @@ Detail → `MARKETDESK.md` (`desk/acceptance.py`, `desk/journal.py`, `desk/map.p
   the desk **accumulates with no pruning** — 1m went 4,154→4,278 rows in ~2h.
   Intraday history builds itself forward; nothing to build.
 - Suite **312 passed**; ruff + mypy clean (51 files). Commits `267366e`, `a8429af`.
+
+## MarketDesk — the journal gets an entrance: record from the chat, grade it (2026-11-02, night)
+
+Detail → `MARKETDESK.md`, daily log `2026-11-02.md`. PR #25 (`journal-from-chat`).
+
+- ⭐ **State that must cross a throwaway runner cannot ride a restore-only cache.**
+  The journal lived in git-ignored `data/`; `marketdesk-bot.yml` was
+  `actions/cache/restore` (restore-only), so a trade typed in the chat was written
+  to a fresh VM and **gone** before the grader ran. Letting the bot save too does
+  NOT fix it: two workflows on one `desk-state-*` key race and `restore-keys`
+  picks the newest, so the loser's snapshot is **silently discarded** — the one
+  failure a journal must not have. Fix: a **git-tracked append-only inbox**
+  (`trade_inbox.jsonl`); an append cannot clobber. A `uid` (minted by the bot,
+  not the row id — ids collide across runners, every fresh store starts at 1)
+  makes the watch's copy idempotent.
+- ⭐ **The test suite read the real clock.** The desk stands down when the market
+  is shut (**Fri 21:00 → Sun 22:00 UTC**), and a stand-down skips every agent, so
+  ~13 tests failed **with correct code** on a weekend. CI never caught it: every
+  push so far landed on a weekday. Fix: `tests/conftest.py` pins the *default*
+  `market_session` to open; a call with an explicit `now=` still reaches the real
+  calendar, and a test's own `monkeypatch` overrides the fixture. Patch
+  `desk.orchestrator` AND `desk.daemon` (each does `from .session import
+  market_session`, binding the name locally).
+- ⭐ **A test must never touch git-tracked state.** The bot integration test
+  called `record_trade` without `DESK_INBOX`, so it appended to the *repository's*
+  own inbox and dirtied the tree. An autouse fixture now points `DESK_INBOX` at
+  `tmp_path` for every test — so no test can, including one written later.
+- ⭐ **The grader's frame must be fetched, not assumed.** Agents read 1h/4h; the
+  journal grades on **5m**. `gather()` fetched only `settings.timeframes`, so a
+  narrowed `DESK_TIMEFRAMES` would starve the grader — and "nothing resolved"
+  looks exactly like "no trade hit its level". `gather` now fetches the **union**.
+- **Two copies of a rule drift.** The trade-verb set was written twice (router +
+  parser) and the copies already disagreed. `record_trade` now imports
+  `bot.TRADE_VERBS` — one source.
+- ⭐ **A journal with no entrance is not a journal.** `record_trade` refuses a
+  missing stop (ungradeable in R); the menu gained "📒 سجل صفقاتي" and dropped the
+  gold study to a text alias ("ذهب") — the 12-button cap is the cap.
