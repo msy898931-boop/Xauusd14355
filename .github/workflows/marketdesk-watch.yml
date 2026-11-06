@@ -154,6 +154,11 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: python3 -m desk.cli hit-rate || true
 
+      # The owner's trades are graded inside the watch pass above (it adopts any
+      # trade from the committed inbox, settles what the bars resolved, and
+      # alerts on each one). Nothing extra is needed here -- one pass grades
+      # everything, which is the whole reason it lives in `watch_once`.
+
       # The desk alerts on its own verdict; this alerts on the levels a plan is
       # built around. The orchestrator can say "no trade" for weeks while price
       # sits between a trigger and a stop, and the moment one side is decided is

@@ -51,15 +51,24 @@ class TelegramError(RuntimeError):
 
 # The menu, in reading order: act first, then read, then the reference tools.
 # Two per row keeps it legible on a phone; twelve buttons fit above the fold
-# without scrolling.
+# without scrolling. The journal now takes one of the twelve, so the gold study
+# -- a deep reference, not a daily act -- moved off the buttons and onto its
+# text alias "ذهب". The cap is deliberate: a menu that keeps growing stops
+# being a menu.
 MENU: list[list[tuple[str, str]]] = [
     [("📊 تحليل الآن", "analysis"), ("🎯 التوصية", "recommend")],
     [("🎬 السيناريوهات", "scenarios"), ("🗺️ خريطة اليوم", "map")],
     [("📈 الخطة الكاملة", "plan"), ("🔔 المستويات", "levels")],
     [("📉 الشارت", "chart"), ("⏱️ السوق", "market")],
-    [("📚 دراسة الذهب", "gold"), ("📋 آخر تقرير", "report")],
+    [("📋 آخر تقرير", "report"), ("📒 سجل صفقاتي", "journal")],
     [("📈 معدل النجاح", "hitrate"), ("❓ مساعدة", "help")],
 ]
+
+# The first word that makes a message a trade rather than a menu request. Kept
+# beside the text map because both answer the same question -- "what did the
+# owner mean?" -- and a verb added to one must be visible to the other.
+TRADE_VERBS: frozenset[str] = frozenset(
+    {"سجل", "سجّل", "/trade", "trade", "صفقة", "صجّل"})
 
 # Plain text a person types, mapped to the same actions the buttons use. A
 # message that matches nothing shows the menu rather than being ignored: an
@@ -81,8 +90,17 @@ TEXT_ACTIONS: dict[str, str] = {
 
 
 def action_for_text(text: str | None) -> str:
-    """The action a typed message means, or `menu` when it matches nothing."""
+    """The action a typed message means, or `menu` when it matches nothing.
+
+    A message that STARTS with a trade verb is a trade, not a menu request. The
+    match is on the first word only, so the numbers after it do not have to be
+    known here -- `record_trade` parses the rest. Without this an owner typing
+    "سجل بيع 4073 وقف 4077" would just get the menu back, which is the silent
+    failure the journal exists to avoid.
+    """
     first = (text or "").strip().split()[0] if (text or "").strip() else ""
+    if first in TRADE_VERBS:
+        return "trade"
     return TEXT_ACTIONS.get(first.lower()) or TEXT_ACTIONS.get(first) or "menu"
 
 
@@ -330,7 +348,14 @@ class TelegramBot:
         if callback_id:
             self.answer_callback(callback_id, "جارٍ التنفيذ…")
         try:
-            text = acts.run(action)
+            if action == "trade":
+                # The owner's own message is parsed, not answered as a command.
+                # It is handled here rather than in `run` because only a typed
+                # message carries the text, and `run(action)` stays the single
+                # button dispatcher every test double already implements.
+                text = acts.record_trade((msg or {}).get("text") or "")
+            else:
+                text = acts.run(action)
         except Exception as exc:  # noqa: BLE001 - a bad action must not kill the pass
             text = escape(f"⚠️ تعذّر تنفيذ الطلب ({exc.__class__.__name__}).")
         if notice:

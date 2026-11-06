@@ -82,7 +82,12 @@ class Orchestrator:
         in `errors` and the run continues with whatever was gathered."""
         s = self.settings
         report: dict = {"symbol": s.symbol, "candles": {}, "quote": None, "errors": []}
-        for tf in s.timeframes:
+        # The owner's journal is graded on its own frame (5m by default), which
+        # need not be one the agents read. Fetching the union here is what stops
+        # a narrowed DESK_TIMEFRAMES from silently starving the grader -- a
+        # missing frame would settle nothing, and "nothing resolved" looks
+        # exactly like "no trade hit its level".
+        for tf in dict.fromkeys((*s.timeframes, *s.trades_timeframes)):
             try:
                 bars = sources.fetch_candles(s.symbol, tf)
                 self.shared.save_candles(s.symbol, tf, bars)
@@ -498,6 +503,12 @@ class Orchestrator:
         n = notifier or Notifier(self.settings)
         live = self._live_price(run)
 
+        # Grade the OWNER's journal too, and tell him when one of his trades
+        # resolves. The desk grades its own plans here already; his trades are
+        # the ones he actually holds, so they deserve the same treatment. It
+        # reads candles already in shared memory, so it costs no network call.
+        out["journal"] = self._grade_journal(n)
+
         # 1) Follow the plan already in play. This runs before the new-signal
         # check: a running plan is the thing the owner is holding.
         tracked = self._follow_active_plan(live, n, run)
@@ -526,6 +537,41 @@ class Orchestrator:
         out["alerted"] = sent
         out["reason"] = "alerted" if sent else "alert not configured/failed"
         return out
+
+    def _grade_journal(self, notifier) -> dict:
+        """Settle the owner's open trades against the bars, and alert on each
+        one that resolved.
+
+        This is the loop that closes the circle the owner asked for: he records
+        a trade once, and the desk grades it and reports the result without him
+        having to remember to check. A resolution alert is the one message that
+        is always worth sending -- it is about a trade he is in.
+
+        `grade_resolved` re-reads the settled rows from the store, so the alert
+        says exactly what was written, not what was intended. A failure here must
+        never stop the desk's own alert, so it is caught and reported as a dict.
+        """
+        from . import inbox
+        from .journal import Journal, resolution_message
+
+        try:
+            j = Journal(self.settings.home / "journal.db")
+            # Copy any trade the owner typed in the chat first. The bot's runner
+            # does not save its `data/`, so the inbox file is where those trades
+            # live until this pass adopts them. Idempotent on uid.
+            inbox.sync(j)
+            resolved = j.grade_resolved(
+                {tf: self.shared.load_candles(self.settings.symbol, tf)
+                 for tf in self.settings.trades_timeframes})
+        except Exception as exc:  # noqa: BLE001 - never block the desk's alert
+            return {"error": exc.__class__.__name__}
+        stats = j.stats()
+        sent: list[int] = []
+        for t in resolved:
+            if notifier.send(resolution_message(t, stats)):
+                sent.append(t.id)
+        return {"settled": [t.id for t in resolved], "alerted": sent,
+                "open": stats.get("open", 0)}
 
     def _live_price(self, run: Run) -> float | None:
         """The price to judge the active plan against: the run's own quote when
