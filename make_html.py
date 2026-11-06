@@ -1,8 +1,11 @@
 """Render chart.html from chart_data.json -- a self-contained levels map."""
 import json
+import os
 
 import pathlib
-D = json.load(open(pathlib.Path(__file__).resolve().parent / "chart_data.json"))
+_OUT = pathlib.Path(os.environ.get("CHART_OUT_DIR")
+                    or pathlib.Path(__file__).resolve().parent)
+D = json.load(open(_OUT / "chart_data.json"))
 
 HTML = """<!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -181,6 +184,6 @@ document.getElementById('scRows').innerHTML=D.sc.map(s=>
 </body></html>"""
 
 out = HTML.replace("__PAYLOAD__", json.dumps(D, ensure_ascii=False))
-with open(pathlib.Path(__file__).resolve().parent / "chart.html", "w") as fh:
+with open(_OUT / "chart.html", "w") as fh:
     fh.write(out)
 print("chart.html written", len(out), "bytes")

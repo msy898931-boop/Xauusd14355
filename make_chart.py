@@ -11,6 +11,7 @@ Run `python3 -m desk.cli gather` first so shared memory holds fresh closed bars.
 """
 import argparse
 import json
+import os
 import sys
 
 ROOT = __import__("pathlib").Path(__file__).resolve().parent
@@ -21,7 +22,12 @@ from desk import scenarios as SC    # noqa: E402
 from desk.cli import _settings      # noqa: E402
 from desk.orchestrator import Orchestrator  # noqa: E402
 
-OUT_JSON = str(ROOT / "chart_data.json")
+# The output directory is overridable so the always-on chart server can
+# serve a directory that holds ONLY the chart. The first version served the
+# whole repo, which put the trade journal and the agent memory on a public
+# URL -- a private file reachable by anyone with the link.
+OUT_DIR = __import__("pathlib").Path(os.environ.get("CHART_OUT_DIR") or ROOT)
+OUT_JSON = str(OUT_DIR / "chart_data.json")
 FRAMES = tuple(dict.fromkeys(MP.MAP_FRAMES + SC.FRAMES))
 
 
@@ -94,6 +100,7 @@ def main() -> int:
                "atr": {tf: round(a, 2) for tf, a in m.atr.items()},
                "trend": m.trend, "event": sc.get("event")}
 
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     with open(OUT_JSON, "w") as fh:
         json.dump(payload, fh, ensure_ascii=False)
     print("bars", len(bars), "pivots", len(piv), "live", payload["live"],
