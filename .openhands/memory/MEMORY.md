@@ -174,3 +174,37 @@ Detail for all of these lives in `MARKETDESK.md`; the daily log is `2026-11-02.m
   `🟢 اشترِ — stop, target, R:R, why`, else it stays a silent marker (never invent
   conviction). `from_scenarios` must get the owner's window + account, or the
   alert's stop won't match sizing.
+
+## MarketDesk — Phase 0 closed + the acceptance scoreboard (2026-11-02, late)
+
+- ⭐ **An acceptance criterion is a computation or it is decoration.** The plan
+  doc's eight "when is this strong?" rows are now `desk acceptance`
+  (`desk/acceptance.py`), each printing its measured number vs its target. Same
+  lesson as the open-bar / budget / scoreboard ones — *the doc row, not the code,
+  was the thing that could lie.*
+- ⭐ **Split a gate row from an outcome row.** `Check.gate`: structural rows (one
+  machine, no stored numbers, balance, decision rate, scenarios, quality) exit
+  nonzero — defects. Market-outcome rows (`edge`, `calibration`) are marked 🟠 and
+  do NOT fail the command: this market has no timing edge (t=−0.28) and the desk is
+  not calibrated (27.3 pts), and *saying so is the criterion*. **A CI gate that goes
+  red for a true market fact is a gate people learn to ignore.**
+- ⭐ **The last hardcoded number shown as fact is gone.** `plan.py`'s
+  `RUNG_REACH = {1R:0.683, 2R:0.540, 3R:0.413}` was one table for *both sides of
+  every symbol*. Now `evidence.rung_reach(C)` measures per side (gold: long
+  73/65/58%, short 47/18/12%), using `measure`'s own first-touch / ambiguous-bar-
+  takes-the-stop rule; a side with no sample returns `{}` and the card prints no
+  figure. `summary_line(m, reach)` carries it onto the recommendation card, so
+  `/plan` and `/recommend` read one engine (the acceptance check verifies the two
+  loaders' bar sets AND the evidence dicts agree).
+- **Push:** this remote has **no credential helper** — a bare `git push` prompts
+  for a username and hangs. Push with the injected token inline:
+  `git push "https://x-access-token:${GITHUB_TOKEN}@github.com/<o>/<r>.git" main:main`,
+  then `git fetch <same-url> main:refs/remotes/origin/main` to sync the tracking ref.
+- ⚠ **Standing owner condition vs. this task's acceptance criteria.** The owner
+  said keep the 10-year study OUT of *my* market reading / recommendations /
+  scenarios (don't cite n=47, expectancy-R, 10y stats). But Section 6 of the plan
+  the owner asked for *requires* study-based validation (walk-forward edge,
+  calibration). Reconciliation: study is fine as **validation/dev tooling**
+  (`desk acceptance`, `walkforward`, `calibration`); the tension is that the plan
+  card now *prints* measured reach %. Flag it, don't silently decide.
+- Suite: **284 passed**; mypy clean (49 files); ruff clean.
