@@ -96,6 +96,14 @@ class Trade:
             else (self.entry - self.exit_price)
         return pts * self.size * 100.0
 
+    @property
+    def weak_reward(self) -> bool:
+        """True when the plan risks more than it stands to gain. A trade that
+        pays less than 1R for 1R of risk needs a win rate above 50% just to
+        break even, which is the opposite of an edge."""
+        rr = self.planned_r
+        return rr is not None and rr < 1.0
+
     def line(self) -> str:
         d = "شراء 🟢" if self.direction == "long" else "بيع 🔴"
         risk = self.risk
@@ -106,6 +114,8 @@ class Trade:
             head += f" · هدف {self.target:,.2f}"
         if rr is not None:
             head += f" · R:R {rr:.2f}"
+            if self.weak_reward:
+                head += " ⚠️"
         head += f" · مخاطرة {risk:.2f} نقطة"
         if self.size is not None:
             head += f" · حجم {self.size:g}"
@@ -359,6 +369,14 @@ class Journal:
         else:
             L.append("<i>ما في صفقات مغلقة بعد — ما في حصيلة تُقاس. "
                      "الأوامر المعلّقة ما بتنحسب لحد ما تنفّذ.</i>")
+        # A weak plan is a fact about the plan, not about the closed record, so
+        # it is reported even before the first trade has been settled.
+        weak = [t for t in rows if t.weak_reward and t.planned_r is not None]
+        if weak:
+            worst = min(weak, key=lambda t: t.planned_r or 0.0)
+            L.append(f"⚠️ <b>{len(weak)} صفقة بمضاعف أقل من 1</b> "
+                     f"(خاطرت أكتر مما كسبت) — الأسوأ #{worst.id} عند "
+                     f"{worst.planned_r:.2f}R. هاد نمط تراكمي، مو صفقة وحدة.")
         return "\n".join(L)
 
 

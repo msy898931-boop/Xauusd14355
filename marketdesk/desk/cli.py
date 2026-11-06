@@ -162,7 +162,13 @@ def cmd_journal(args) -> int:
                     note=args.note, source=args.source,
                     pending=bool(getattr(args, "pending", False)))
         print(f"✅ انسجّلت الصفقة #{tid}")
-        print("  " + j.all_trades()[-1].line())
+        t = j.all_trades()[-1]
+        print("  " + t.line())
+        if t.weak_reward:
+            print(f"⚠️  المضاعف {t.planned_r:.2f}R أقل من 1 — بتخاطر "
+                  f"{t.risk:.2f} نقطة لتكسب {abs((t.target or t.entry) - t.entry):.2f}.")
+            print("    لتغطية خسارة وحدة بدك أكتر من صفقة رابحة. "
+                  "وسّع الهدف أو قرّب الوقف.")
         return 0
     if sub == "close":
         if args.exit is None:

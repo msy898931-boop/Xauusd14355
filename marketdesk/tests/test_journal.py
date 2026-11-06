@@ -167,3 +167,21 @@ def test_report_totals_money_and_flags_unpriced_trades(j: Journal) -> None:
     out = j.report()
     assert "+9.00$" in out
     assert "1 صفقة بلا حجم مسجّل" in out
+
+
+def test_a_trade_that_risks_more_than_it_pays_is_flagged(j: Journal) -> None:
+    """The desk refuses its own plans below min_rr; the owner's log should at
+    least say when a trade is on the wrong side of 1R, at the moment it is
+    written down rather than after the week is over."""
+    weak = j.add("XAUUSD", "short", 4036.0, 4044.0, 4031.0)   # 8 risk, 5 reward
+    sound = j.add("XAUUSD", "short", 4036.0, 4044.0, 4020.0)  # 8 risk, 16 reward
+    no_target = j.add("XAUUSD", "short", 4036.0, 4044.0)      # nothing to judge
+    weak_t, sound_t, no_target_t = j.all_trades()
+    assert weak_t.planned_r == pytest.approx(0.625)
+    assert weak_t.weak_reward is True
+    assert sound_t.weak_reward is False
+    assert no_target_t.weak_reward is False  # a missing target is not a weak one
+    assert "⚠️" in weak_t.line()
+    assert "⚠️" not in sound_t.line()
+    assert "3 صفقة" not in j.report() and "1 صفقة بمضاعف أقل من 1" in j.report()
+    assert weak == 1 and sound == 2 and no_target == 3
