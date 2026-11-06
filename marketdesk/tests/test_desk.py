@@ -5203,6 +5203,47 @@ def test_map_liquidity_only_lists_nearby_stop_clusters():
     assert all(x.price < m.live for x in dn)
 
 
+def test_map_liquidity_side_is_positional_not_pivot_kind():
+    """A level's side is where it sits relative to the PRICE, not whether it was
+    a swing high or low. The first version labelled by pivot kind, so once price
+    traded past a level the map called a level above the price "below" -- on the
+    live board 3 of 4 levels were on the wrong side, telling the reader the
+    opposite of what it had measured.
+
+    Build a flat zig-zag (so equal highs and lows form clusters) followed by a
+    clean trend away from it: every cluster then sits on ONE side of the price
+    while the pivot kinds are mixed. Under the old rule the labels split; under
+    the fixed rule they all agree with the price.
+    """
+    from desk import map as MP
+
+    def flat_then_trend(direction: str, n_flat: int = 60, n_trend: int = 60):
+        out = []
+        for i in range(n_flat):
+            p = 3985.0 if i % 2 else 4015.0
+            out.append({"open_time": i * 60, "open": p, "high": p + 1.0,
+                        "low": p - 1.0, "close": p, "is_open": 0})
+        last = out[-1]["close"]
+        for j in range(n_trend):
+            p = last + (3.0 * j if direction == "up" else -3.0 * j)
+            out.append({"open_time": (n_flat + j) * 60, "open": p,
+                        "high": p + 1.0, "low": p - 1.0, "close": p,
+                        "is_open": 0})
+        return out
+
+    for direction, want in (("up", "below"), ("down", "above")):
+        frames = {tf: flat_then_trend(direction) for tf in MP.MAP_FRAMES}
+        live = frames["1h"][-1]["close"]
+        m = MP.build(frames, live=live, symbol="XAUUSD")
+        assert m.liquidity, f"{direction}: expected clusters to test"
+        for x in m.liquidity:
+            assert x.side == ("above" if x.price > live else "below"), (
+                f"{direction}: {x.price} labelled {x.side} of {live} but sits "
+                f"{'above' if x.price > live else 'below'}")
+        assert all(x.side == want for x in m.liquidity), (
+            f"{direction}: every cluster is {want} the price")
+
+
 def test_map_render_carries_no_trade_instruction():
     """The map is context, not a signal. It must NOT tell the reader to buy or
     sell -- that is the level alert's job, and only when a level clears R:R."""

@@ -154,12 +154,12 @@ def _liquidity(bars_by_frame: dict[str, list[dict]], live: float,
         if len(bars) < 10:
             continue
         lo, hi = ind.pivots(bars, wing=3)
-        for side, arr in (("above", hi), ("below", lo)):
+        for arr in (hi, lo):
             for i in range(len(arr)):
                 for j in range(i + 1, len(arr)):
                     if abs(arr[i] - arr[j]) <= tol:
                         out.append(Liquidity(price=(arr[i] + arr[j]) / 2,
-                                             side=side, frame=tf))
+                                             side="", frame=tf))
     # Collapse near-duplicates from overlapping pairs, keeping the highest count
     # by price band, then keep the nearest on each side.
     out.sort(key=lambda x: x.price)
@@ -170,6 +170,16 @@ def _liquidity(bars_by_frame: dict[str, list[dict]], live: float,
         merged.append(liq)
     above = [x for x in merged if x.price > live][:2]
     below = [x for x in merged if x.price < live][-2:]
+    # `side` is where the level sits relative to the PRICE, not whether it was a
+    # swing high or low. Reading it off the pivot kind mislabelled every level
+    # the price had since moved through: a swing low now above the price was
+    # reported as "below", and a high now below it as "above" -- 3 of 4 levels
+    # were on the wrong side. The filter below is positional; the label must be
+    # too, or the map tells the reader the opposite of what it measured.
+    for x in above:
+        x.side = "above"
+    for x in below:
+        x.side = "below"
     return sorted(below + above, key=lambda x: x.price)
 
 
