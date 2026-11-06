@@ -513,7 +513,8 @@ class Orchestrator:
             out["reason"] = "already alerted"
             return out
         from .report import render
-        sent = n.send(render(run, lang="ar"))
+        sent = n.send(render(run, lang="ar",
+                             show_study=self.settings.show_study))
         if sent:
             ledger.record(detail, run.run_id)
             plan = active.adopt(self.settings, run.recommendation, run.run_id)

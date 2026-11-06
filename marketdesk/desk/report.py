@@ -24,11 +24,16 @@ def _n(v, nd=2, suffix=""):
         return str(v)
 
 
-def _scenarios_plain(sc: dict) -> str:
+def _scenarios_plain(sc: dict, *, show_study: bool = False) -> str:
     """The scenario set as plain text, for the main card.
 
     `scenarios.render` emits Telegram HTML; the card is read in a terminal, so
     the tags would show. Same content, same numbers, no markup.
+
+    `show_study` gates the probability line. The probability is the ten-year
+    study's number for this state, and the owner's rule keeps the study off the
+    live card; the actionable part of a scenario -- trigger, stop, target, R:R,
+    invalidation, size -- is live and stays.
     """
     L = [f"— السيناريوهات — (السعر {_n(sc.get('live'), 2)})"]
     if sc.get("probability_state"):
@@ -48,7 +53,7 @@ def _scenarios_plain(sc: dict) -> str:
         L.append(f"      الوقف {_n(s['stop'])} ({s['risk']:,.0f} نقطة){rr} · الهدف "
                  + "، ".join(_n(t) for t in s["targets"]))
         prob = s.get("probability")
-        if prob:
+        if prob and show_study:
             if prob.get("sufficient"):
                 L.append(f"      🎲 احتمال مقاس: {prob['p']:.0%} من {prob['n']} حالة · "
                          f"توقع {prob['mean_r']:+.2f}R")
@@ -71,7 +76,32 @@ def _scenarios_plain(sc: dict) -> str:
     return "\n".join(L)
 
 
-def render(run: Run, lang: str = "ar") -> str:
+def _study_summary(s, *, show_study: bool) -> str:
+    """An agent's summary, with the ten-year study kept off the live card.
+
+    Only the analog agent's summary is written from the study: it is a frequency
+    over ten years ("this state occurred 321 times; long expectancy +0.00R"). Its
+    verdict is a decision and stays; the live part -- the state label, computed
+    from the live bars -- stays too. The historical counts and expectancies do
+    not, per the owner's standing rule. `DESK_SHOW_STUDY=1` restores the text.
+    """
+    if show_study or s.agent != "analog":
+        return s.summary
+    state = (s.payload or {}).get("state")
+    if not state:
+        return "قراءة حالة السوق (بلا إحصاءات الدراسة)."
+    return (f"حالة السوق الآن: {state} — "
+            f"(إحصاءات الدراسة خارج القراءة الحيّة؛ تظهر في أمر desk acceptance).")
+
+
+def render(run: Run, lang: str = "ar", *, show_study: bool = False) -> str:
+    """The card, ordered for a decision: what to do first, why after.
+
+    A trader reads the top two lines and acts; the specialist detail is evidence
+    for that decision, so it sits below. The live call is built from live output
+    only -- the ten-year study's statistics stay off this card unless
+    `show_study` is set (owner's standing rule).
+    """
     r = run.recommendation
     L: list[str] = []
     head = "قراءة السوق والتوصية" if lang == "ar" else "Market read & recommendation"
@@ -85,38 +115,22 @@ def render(run: Run, lang: str = "ar") -> str:
             L.append(f"بيفتح: {sess['opens_at'][:16].replace('T', ' ')} UTC")
         L.append("لا قراءة ولا توصية — المكتب بيستنّى افتتاح السوق.")
         return "\n".join(L)
+
     q = (r.get("gather") or {}).get("quote") or {}
     L.append(f"السعر {_n(q.get('mid'), 3)} · السوق {ar.market_state(q.get('market_state'))} · "
              f"عمر التسعيرة {q.get('quote_age_s', '—')} ثانية · تغيّر اليوم {_n(q.get('day_diff_pct'), 2, '%')}")
-    L.append(f"المدة {run.duration_s:.1f} ثانية · المعرّف {run.run_id}")
     llm = r.get("llm") or {}
     if llm and not llm.get("available", True):
         L.append("⚠ النموذج غير متاح — النصوص أدناه حتمية، محسوبة لا مكتوبة.")
     elif llm.get("rotations"):
         L.append(f"↻ النموذج: {llm.get('model')} "
                  f"(دار {llm['rotations']} مرة بعد نفاد حصة موديل).")
+
+    # ---- 1) the decision ---------------------------------------------------
     L.append("")
-    L.append("— دراسات الوكلاء —")
-    for s in sorted(run.studies, key=lambda x: x.agent):
-        L.append(f"  [{ar.agent(s.agent)}] {ar.stance(s.stance)} "
-                 f"ثقة {s.confidence:.2f} · نتيجة {s.score:+.2f}")
-        L.append(f"               {s.summary}")
-    L.append("")
-    L.append("— التوصية النهائية —")
+    L.append("— القرار —")
     L.append(f"  الاتجاه: {ar.verdict(run.verdict)}  (نتيجة مرجّحة {run.score:+.2f})")
-    # The score is a lean, not a probability. Say what it actually delivered:
-    # measured over ten years a nominal 92% was right 55.6% of the time, and a
-    # trader who sizes on the nominal number is mis-sizing.
-    try:
-        from . import calibration as cal
-        rel = cal.reliability(run.symbol, run.score)
-    except Exception:
-        rel = None
-    if rel:
-        real, n = rel
-        nominal = 0.5 + 0.5 * min(1.0, abs(run.score))
-        L.append(f"  ثقة مُعايَرة: {real:.0%} فعلياً (على {n} حالة مشابهة) — "
-                 f"بينما الثقة الاسمية {nominal:.0%}")
+    L.append(f"  مسموح بالتداول: {'نعم' if r.get('allowed') else 'لا'}")
     bias = r.get("bias") or {}
     if bias.get("direction"):
         L.append(f"  الميل الضمني: {ar.direction(bias['direction'])} ({bias.get('score'):+.3f})")
@@ -125,8 +139,25 @@ def render(run: Run, lang: str = "ar") -> str:
         order = ["1d", "4h", "1h", "30m", "15m", "5m", "1m"]
         cells = [f"{tf}:{pfb[tf]:+.1f}" for tf in order if tf in pfb]
         L.append(f"  الميل حسب الفريم: {' · '.join(cells)}")
-    L.append(f"  مسموح بالتداول: {'نعم' if r.get('allowed') else 'لا'}")
+    # The score is a lean, not a probability. Say what it actually delivered:
+    # measured over ten years a nominal 92% was right 55.6% of the time, and a
+    # trader who sizes on the nominal number is mis-sizing.
+    if show_study:
+        try:
+            from . import calibration as cal
+            rel = cal.reliability(run.symbol, run.score)
+        except Exception:
+            rel = None
+        if rel:
+            real, n = rel
+            nominal = 0.5 + 0.5 * min(1.0, abs(run.score))
+            L.append(f"  ثقة مُعايَرة: {real:.0%} فعلياً (على {n} حالة مشابهة) — "
+                     f"بينما الثقة الاسمية {nominal:.0%}")
+
+    # ---- 2) the plan, when there is one ------------------------------------
     if r.get("entry") is not None:
+        L.append("")
+        L.append("— الخطة —")
         L.append(f"  الدخول {_n(r.get('entry'))} · الوقف {_n(r.get('stop'))} · "
                  f"المخاطرة/المكافأة {_n(r.get('rr'), 2)}")
         tg = " · ".join(f"{_n(t['level'])} ({ar.kind(t['kind'])})" for t in r.get("targets", []))
@@ -135,14 +166,24 @@ def render(run: Run, lang: str = "ar") -> str:
         mult = r.get("vol_mult")
         note = "" if mult in (None, 1.0) else f" → وسّعنا الوقف {mult:.2f}×"
         L.append(f"  نشاط آخر شمعة ساعة: {r['vol_ratio']:.2f}× المتوسط{note}")
-    # The scenarios are the other half of the recommendation: not "where is it
-    # going" but "what has to happen, and what proves it wrong". Rendered from
-    # the same object `/scenarios` prints, so the card and the button agree.
-    if r.get("scenarios"):
-        L.append("")
-        L.append(_scenarios_plain(r["scenarios"]))
     if r.get("levels_note"):
         L.append(f"  ملاحظة: {r['levels_note']}")
+
+    # ---- 3) the scenarios: the other half of the machine -------------------
+    # Not "where is it going" but "what has to happen, and what proves it wrong".
+    # Rendered from the same object `/scenarios` prints, so card and button agree.
+    if r.get("scenarios"):
+        L.append("")
+        L.append(_scenarios_plain(r["scenarios"], show_study=show_study))
+
+    # ---- 4) the specialists, as evidence for the decision above -----------
+    L.append("")
+    L.append("— دراسات الوكلاء —")
+    for s in sorted(run.studies, key=lambda x: x.agent):
+        L.append(f"  [{ar.agent(s.agent)}] {ar.stance(s.stance)} "
+                 f"ثقة {s.confidence:.2f} · نتيجة {s.score:+.2f}")
+        L.append(f"               {_study_summary(s, show_study=show_study)}")
+
     if r.get("warnings"):
         L.append(f"  ⚠ تحذيرات: {'; '.join(r['warnings'])}")
     if r.get("errors"):
@@ -150,4 +191,5 @@ def render(run: Run, lang: str = "ar") -> str:
     active_line = r.get("active_plan_line")
     if active_line:
         L.append(active_line)
+    L.append(f"  (المدة {run.duration_s:.1f} ثانية · المعرّف {run.run_id})")
     return "\n".join(L)

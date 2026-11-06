@@ -301,7 +301,7 @@ class Actions:
                      min_stop_points=self.settings.min_stop_points,
                      max_stop_points=self.settings.max_stop_points,
                      min_rr=self.settings.min_rr)
-        return S.render(sc)
+        return S.render(sc, show_study=self.settings.show_study)
 
     def gold(self) -> str:
         """The 10-year study: this state, and what followed it before."""
@@ -323,6 +323,11 @@ class Actions:
         return rows[0] if rows else None
 
     def recommend(self) -> str:
+        """The last stored call, in decision order: verdict, plan, then note.
+
+        The button answers "what now?"; the specialist card behind `/report`
+        answers "why". The live call only -- the study's record is off by default.
+        """
         row = self._last_run()
         if not row:
             return ("لا توجد قراءة محفوظة بعد.\n"
@@ -330,29 +335,38 @@ class Actions:
         rec = _payload(row)
         verdict = VERDICT_AR.get(row["verdict"], row["verdict"])
         age = _age(time.time() - (row["finished_at"] or row["started_at"]))
-        lines = [f"<b>التوصية الحالية</b> — {_e(row['symbol'])}",
+        lines = [f"🎯 <b>التوصية</b> — {_e(row['symbol'])}",
                  f"الاتجاه: <b>{verdict}</b> · نتيجة {row['score']:+.2f}",
-                 f"عمر القراءة: {age}"]
+                 f"<i>عمر القراءة: {age}</i>"]
         if rec.get("entry") is not None:
+            lines.append("")
+            lines.append("<b>الخطة</b>")
             lines.append(f"الدخول {rec['entry']} · الوقف {rec['stop']} · "
                          f"R:R {rec.get('rr')}")
             tg = " · ".join(f"{t['level']} ({_e(t['kind'])})" for t in rec.get("targets", []))
             lines.append(f"الأهداف: {tg}")
+        elif rec.get("bias", {}).get("direction") == "flat":
+            lines.append("<i>لا صفقة — الميل داخل النطاق المحايد.</i>")
         if rec.get("levels_note"):
             lines.append(f"ملاحظة: {_e(rec['levels_note'])}")
         ev_line = self._evidence_line()
         if ev_line:
             lines.append(ev_line)
-        lines.append("(للقراءة الحيّة اضغط «📊 تحليل الآن»)")
+        lines.append("<i>(للقراءة الحيّة والسيناريوهات: «📊 تحليل الآن»)</i>")
         return "\n".join(lines)
 
     def _evidence_line(self) -> str:
         """The measured record of the setup, from the shipped 10-year file.
 
-        The plan card prints this; the recommendation card used to print nothing
-        about a track record, so the two paths disagreed. Same measurement, same
-        source, both cards. Silence (not a claim) when the file is missing.
+        This is the ten-year study, and the owner's standing rule keeps the study
+        off the live cards: the recommendation is built from live desk output, and
+        a historical statistic cited beside it reads as a live fact. So this line
+        is OFF by default and returns "" -- the card carries the live call only.
+        `DESK_SHOW_STUDY=1` brings it back; the same numbers are always in
+        `desk acceptance`. Nothing is deleted, only moved off the live surface.
         """
+        if not self.settings.show_study:
+            return ""
         csv = self._long_csv()
         if csv is None:
             return ""
@@ -370,7 +384,8 @@ class Actions:
         row = self._last_run()
         if not row:
             return "لا يوجد تقرير محفوظ بعد."
-        return render(_run_from_row(self.shared, row), lang="ar")
+        return render(_run_from_row(self.shared, row), lang="ar",
+                      show_study=self.settings.show_study)
 
     def market(self) -> str:
         s = self.settings

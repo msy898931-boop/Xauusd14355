@@ -28,9 +28,10 @@ def _settings(args) -> Settings:
 def cmd_run(args) -> int:
     from .memory import json_default
 
-    desk = Orchestrator(_settings(args))
+    settings = _settings(args)
+    desk = Orchestrator(settings)
     run = desk.run()
-    text = render(run, lang=args.lang)
+    text = render(run, lang=args.lang, show_study=settings.show_study)
     print(text)
     if args.json:
         print(json.dumps({"run_id": run.run_id, "verdict": run.verdict,
@@ -40,7 +41,7 @@ def cmd_run(args) -> int:
     if getattr(args, "send", False):
         from .notify import Notifier
 
-        ok = Notifier(_settings(args)).send(text)
+        ok = Notifier(settings).send(text)
         print(f"analysis sent: {ok}")
         return 0 if ok else 1
     return 0
@@ -281,7 +282,9 @@ def cmd_plan(args) -> int:
         from . import sources
         bars = sources.fetch_candles(symbol, "1d", limit=1000)
         live = float(sources.fetch_quote(symbol)["mid"])
-    print(format_plan(build_plan(bars, live), symbol=symbol))
+    settings = _settings(args)
+    print(format_plan(build_plan(bars, live), symbol=symbol,
+                      show_study=settings.show_study))
     return 0
 
 

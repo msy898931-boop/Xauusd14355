@@ -106,25 +106,34 @@ def build_plan(bars: list[dict], live: float) -> dict:
     }
 
 
-def _side_lines(s: Side) -> list[str]:
+def _side_lines(s: Side, *, show_study: bool = False) -> list[str]:
     out = [f"  {'LONG' if s.direction == 'long' else 'SHORT'} — trigger "
            f"{'break above' if s.direction == 'long' else 'break below'} {s.trigger:,.2f}",
            f"    entry   {s.entry:,.2f}",
            f"    stop    {s.stop:,.2f}   ({s.risk:,.2f} pts = {s.risk_pct:.2f}%)"]
     for i, (m, t) in enumerate(zip(LADDER, s.targets, strict=True), 1):
-        reach = s.reach.get(m)
-        extra = (f"   reached {reach:.0%} of the time (n={s.evidence['n']})"
-                 if reach is not None else "")
+        extra = ""
+        if show_study:
+            reach = s.reach.get(m)
+            if reach is not None:
+                extra = f"   reached {reach:.0%} of the time (n={s.evidence['n']})"
         out.append(f"    target{i} {t:,.2f}   ({m:.0f}R, {m*s.risk:,.2f} pts){extra}")
     ev_d = s.evidence
     verdict = "مدعوم" if ev_d.get("supported") else "غير مدعوم — لا تعتمد عليه"
-    out.append(f"    الدليل     n={ev_d['n']} إصابة={ev_d['hit']:.1%} "
-               f"توقع={ev_d['mean_r']:+.3f}R خطأ={ev_d['base_r']:+.3f}R "
-               f"ميزة={ev_d['edge']:+.3f}R t={ev_d['t']:+.2f}  -> {verdict}")
+    if show_study:
+        out.append(f"    الدليل     n={ev_d['n']} إصابة={ev_d['hit']:.1%} "
+                   f"توقع={ev_d['mean_r']:+.3f}R خطأ={ev_d['base_r']:+.3f}R "
+                   f"ميزة={ev_d['edge']:+.3f}R t={ev_d['t']:+.2f}  -> {verdict}")
+    else:
+        # The verdict is a decision and stays; the study's statistics behind it do
+        # not belong on the live card (owner's standing rule). They are one flag
+        # away, and they are always visible in `desk acceptance`.
+        out.append(f"    التقييم    {verdict}")
     return out
 
 
-def format_plan(p: dict, symbol: str = "XAUUSD") -> str:
+def format_plan(p: dict, symbol: str = "XAUUSD", *,
+                show_study: bool = False) -> str:
     last = p["last_closed"]
     L: list[str] = []
     L.append("=" * 74)
@@ -144,9 +153,9 @@ def format_plan(p: dict, symbol: str = "XAUUSD") -> str:
         L.append(f"                    window {p['window_start']} .. {p['window_end']} "
                  f"({p['window_bars']} bars)")
     L.append("")
-    L.extend(_side_lines(p["long"]))
+    L.extend(_side_lines(p["long"], show_study=show_study))
     L.append("")
-    L.extend(_side_lines(p["short"]))
+    L.extend(_side_lines(p["short"], show_study=show_study))
     L.append("")
     L.append("-" * 74)
     L.append("  management: scale 1/3 at each rung; move the stop to entry after 1R.")
@@ -164,8 +173,11 @@ def format_plan(p: dict, symbol: str = "XAUUSD") -> str:
     else:
         L.append("  both sides clear the evidence bar; size by the weaker one.")
     base = p.get("evidence_base") or {}
-    if base:
+    if base and show_study:
         L.append(f"  control: always-long {base.get('long_r', 0):+.3f}R, "
                  f"always-short {base.get('short_r', 0):+.3f}R over the same bars.")
-    L.append("  one sample, one market, ~10 years. not a promise.")
+    L.append("  one sample, one market, ~10 years. not a promise." if show_study
+             else "  one sample, one market. not a promise.")
+    if not show_study:
+        L.append("  (study statistics: `desk acceptance` · or set DESK_SHOW_STUDY=1)")
     return "\n".join(L)

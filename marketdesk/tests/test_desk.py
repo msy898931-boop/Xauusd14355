@@ -1517,8 +1517,14 @@ def test_plan_target_reach_is_measured_per_side_not_a_constant():
     assert empty["long"]["reach"] == {} and empty["short"]["reach"] == {}
 
 
-def test_plan_prints_the_measured_reach_not_the_old_constant():
-    """End of the string: the card must carry the measurement, per side."""
+def test_plan_keeps_the_study_off_the_live_card_by_default():
+    """The live card carries the study's VERDICT, not its statistics.
+
+    Owner's standing rule: the plan is built from live output, so a ten-year
+    reach rate printed beside it reads as a live fact. Default -> no reach rate,
+    no n, no control baseline. `show_study=True` restores them (nothing deleted,
+    only moved), and `desk acceptance` always shows them.
+    """
     from desk import history
     from desk.plan import build_plan, format_plan
 
@@ -1526,10 +1532,20 @@ def test_plan_prints_the_measured_reach_not_the_old_constant():
     if len(rows) < 200:
         import pytest
         pytest.skip("shipped XAUUSD history not available")
-    text = format_plan(build_plan(rows, rows[-1]["close"]))
-    assert "reached" in text and "of the time" in text
-    # The retired constant must not survive anywhere in the card.
-    assert "68% of the time" not in text
+    plan = build_plan(rows, rows[-1]["close"])
+
+    live = format_plan(plan)
+    assert "reached" not in live and "of the time" not in live
+    assert "control: always-long" not in live
+    # The decision and the plan itself are live and stay.
+    assert "target1" in live and "not a promise" in live
+    assert "التقييم" in live
+
+    with_study = format_plan(plan, show_study=True)
+    assert "reached" in with_study and "of the time" in with_study
+    assert "control: always-long" in with_study
+    # The retired constant must not survive even with the study shown.
+    assert "68% of the time" not in with_study
 
 
 # ---- acceptance criteria ----------------------------------------------
@@ -2719,12 +2735,17 @@ def test_plan_labels_each_side_with_its_evidence(tmp_path):
     # Evidence is recomputed, never a constant: the field exists and carries n.
     assert plan["long"].evidence["n"] == 0
     assert "base_r" in plan["long"].evidence
+    # Default: the verdict is on the live card, the study's statistics are not.
     out = format_plan(plan)
-    assert "الدليل" in out
+    assert "التقييم" in out
     assert "غير مدعوم" in out
     assert "not a promise" in out
-    # The control is printed, so a side cannot be read without its baseline.
-    assert "control: always-long" in out
+    assert "control: always-long" not in out
+
+    # With the study explicitly shown, its numbers and the control baseline return.
+    shown = format_plan(plan, show_study=True)
+    assert "الدليل" in shown
+    assert "control: always-long" in shown
 
 
 def test_plan_evidence_is_measured_not_constant(tmp_path):
@@ -2762,12 +2783,14 @@ def test_plan_evidence_is_measured_not_constant(tmp_path):
 
 # ---- the two cards must not disagree about the record ----------------
 
-def test_recommendation_card_carries_the_same_measured_evidence(tmp_path):
-    """The plan card and the recommendation card must report the SAME record.
+def test_recommendation_card_keeps_the_study_off_by_default(tmp_path, monkeypatch):
+    """The recommendation card carries the live call only; the study's record is
+    one flag away.
 
-    They used to be two disjoint paths: the plan printed a hardcoded table, the
-    recommendation printed nothing. Both now read the shipped file through
-    `evidence.measure`, so a reader cannot get two different stories.
+    Owner's standing rule: the card is built from live output, so a ten-year
+    record printed on it reads as a live fact. Default -> no study line.
+    `DESK_SHOW_STUDY=1` (Settings.show_study) brings back the SAME record, read
+    through the same `evidence.measure`, so the two cards still cannot disagree.
     """
     import csv as _csv
 
@@ -2793,10 +2816,43 @@ def test_recommendation_card_carries_the_same_measured_evidence(tmp_path):
             px = 3000 + (i % 10) * 5 + (i // 10) * 2
             w.writerow([f"2025-{(i // 28) % 12 + 1:02d}-{i % 28 + 1:02d}T00:00:00Z",
                         px, px + 2, px - 2, px, 0, 10, "False"])
+
     actions = Actions(s)
     actions._long_csv = lambda: csv  # type: ignore[method-assign]
-    card = actions.recommend()
-    assert "الدليل المقاس" in card
+    assert "الدليل المقاس" not in actions.recommend()
+
+    # The flag restores the same record -- the two cards still agree.
+    s2 = Settings(home=tmp_path / "home", symbol="XAUUSD")
+    s2.show_study = True
+    actions2 = Actions(s2)
+    actions2._long_csv = lambda: csv  # type: ignore[method-assign]
+    assert "الدليل المقاس" in actions2.recommend()
+
+
+def test_report_keeps_the_analog_study_off_the_live_card():
+    """The analog agent's summary is a ten-year frequency; the live card shows the
+    state, not the study's counts.
+
+    The state label is computed from live bars and is a fact about now, so it
+    stays. "This state occurred 321 times; long expectancy +0.00R" is the study
+    and does not, per the owner's standing rule. `show_study=True` restores it.
+    """
+    from desk import report
+    from desk.agents.base import Study
+    from desk.orchestrator import Run
+
+    study = Study("analog", "analog", "neutral", 1.0, 0.0,
+                  "الحالة «تحت المتوسط 50» تكرّرت 321 مرة. الشراء توقع +0.00R "
+                  "(ميزة -0.25R). العيّنة كافية.",
+                  {"state": "تحت المتوسط 50 · RSI ضعيف · أسفل المدى"})
+    run = Run("r1", "XAUUSD", 0.0, [study], "no-trade", 0.0, {}, [], 1.0)
+
+    live = report.render(run)
+    assert "تحت المتوسط 50" in live                 # the live state stays
+    assert "تكرّرت 321" not in live                 # the study's count does not
+    assert "ميزة" not in live
+
+    assert "تكرّرت 321" in report.render(run, show_study=True)
 
 
 # ---- levels -----------------------------------------------------------
@@ -3731,9 +3787,15 @@ def test_report_prints_the_scenarios_not_only_the_verdict():
     text = report.render(run)
     assert "السيناريوهات" in text
     assert "4,084.20" in text
-    assert "20%" in text
     assert "يُبطَل" in text
     assert "<b>" not in text, "the plain card must not carry HTML tags"
+    # Default: the study's probability is off the live card; the actionable
+    # scenario (trigger, stop, target, R:R, invalidation) stays.
+    assert "20%" not in text
+    assert "R:R 1.8" in text
+
+    # The flag restores the probability.
+    assert "20%" in report.render(run, show_study=True)
 
 
 def test_scenarios_ignore_a_level_that_is_the_price_itself():
@@ -3962,6 +4024,27 @@ def test_scenario_render_is_telegram_html():
     text = S.render(sc)
     assert "<b>" in text and "</b>" in text
     assert "&lt;" not in text
+
+
+def test_scenario_probability_is_gated_off_the_live_card():
+    """The scenario's probability is the ten-year study's number; the live card
+    omits it by default and `show_study=True` restores it.
+
+    The actionable part of the scenario -- trigger, stop, target, R:R -- is live
+    and must survive both ways.
+    """
+    from desk import scenarios as S
+
+    sc = S.build({"1h": _wave_frame(base=3960.0)}, 3960.0, calendar=[])
+    for s in sc["scenarios"]:
+        s["probability"] = {"p": 0.42, "n": 65, "mean_r": -0.49, "t": -1.0,
+                            "sufficient": True, "state": "x"}
+
+    live = S.render(sc)
+    assert "احتمال الوصول" not in live
+    assert "الوقف" in live and "R:R" in live       # the trade is still there
+
+    assert "احتمال الوصول" in S.render(sc, show_study=True)
 
 
 # ---- the always-on daemon ---------------------------------------------

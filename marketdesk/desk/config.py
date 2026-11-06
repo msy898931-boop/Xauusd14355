@@ -181,6 +181,17 @@ class Settings:
     min_stop_points: float = float(os.environ.get("DESK_MIN_STOP_POINTS", "0"))
     max_stop_points: float = float(os.environ.get("DESK_MAX_STOP_POINTS", "0"))
 
+    # ---- the study boundary ------------------------------------------------
+    # The owner's standing rule: the live reading, the plan and the scenarios are
+    # built from live desk output only. The ten-year study is a VALIDATION tool --
+    # it grades the desk (`desk acceptance`, `walkforward`, `calibration`, `bias`,
+    # `backtest`, `gold`) -- and must not be cited as information on a live card.
+    # So the live cards show the study's *verdict* where a decision needs one, and
+    # none of its statistics: no reach rates, no n, no expectancy in R, no control
+    # baseline, no "on 146 similar cases". Set DESK_SHOW_STUDY=1 to put the
+    # statistics back on the cards; nothing is deleted, only moved.
+    show_study: bool = os.environ.get("DESK_SHOW_STUDY") == "1"
+
     @property
     def shared_db(self) -> Path:
         return self.home / "shared.db"

@@ -328,8 +328,15 @@ def build(bars_by_frame: dict[str, list[dict]], live: float,
     return out
 
 
-def render(sc: dict) -> str:
-    """Telegram-ready HTML. Every number is one the desk computed."""
+def render(sc: dict, *, show_study: bool = False) -> str:
+    """Telegram-ready HTML. Every number is one the desk computed.
+
+    `show_study` gates the probability line. That probability is the ten-year
+    study's frequency for the current state ("20% of 65 similar cases"), and the
+    owner's rule keeps the study off the live card. The actionable scenario --
+    trigger, confirm, stop, target, R:R, invalidation, size -- is live and always
+    printed. `DESK_SHOW_STUDY=1` restores the probability.
+    """
     L: list[str] = []
     L.append(f"🎯 <b>السيناريوهات</b> — {sc['symbol']}")
     L.append(f"السعر <b>{sc['live']:,.2f}</b>")
@@ -359,7 +366,7 @@ def render(sc: dict) -> str:
         L.append(f"      الوقف {s['stop']:,.2f} ({s['risk']:,.0f} نقطة){rr} · الهدف "
                  + "، ".join(f"{t:,.2f}" for t in s["targets"]))
         prob = s.get("probability")
-        if prob:
+        if prob and show_study:
             if prob.get("sufficient"):
                 L.append(f"      🎲 احتمال الوصول (مقاس): <b>{prob['p']:.0%}</b> "
                          f"من {prob['n']} حالة مشابهة · توقع {prob['mean_r']:+.2f}R")
