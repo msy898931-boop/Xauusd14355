@@ -62,6 +62,84 @@ def atr(bars: list[dict], n: int = 14) -> float | None:
     return a
 
 
+def atr_series(bars: list[dict], n: int = 14) -> list[float]:
+    """The ATR at every bar, Wilder-smoothed. Empty when the sample is short.
+
+    One pass instead of calling `atr` per bar, which matters because
+    `atr_percentile` ranks today's ATR against a few hundred of its own past
+    values and a per-bar recompute is quadratic.
+    """
+    trs = true_ranges(bars)
+    if len(trs) < n:
+        return []
+    a = sum(trs[:n]) / n
+    out = [a]
+    for tr in trs[n:]:
+        a = (a * (n - 1) + tr) / n
+        out.append(a)
+    return out
+
+
+def atr_percentile(bars: list[dict], n: int = 14, lookback: int = 250,
+                   minimum: int = 60) -> float | None:
+    """Where the latest ATR sits within its own recent range, as 0..1.
+
+    An ATR of 40 dollars is high or low only against the instrument's own
+    history -- a fixed threshold cannot know that, and gold's dollar ATR has
+    tripled over the sample. Returns None until there is enough history to rank
+    against, so a short series reads as "no reading", not as a made-up rank.
+    """
+    window = bars[-(lookback + n):]
+    series = atr_series(window, n)
+    if len(series) < minimum:
+        return None
+    current = series[-1]
+    return sum(1 for v in series if v <= current) / len(series)
+
+
+def adx(bars: list[dict], n: int = 14) -> float | None:
+    """Wilder's Average Directional Index: trend STRENGTH, not direction.
+
+    Above ~25 the tape is trending, below ~20 it is ranging. This is the one
+    thing no other indicator here reports -- every directional read (EMA stack,
+    structure, momentum) says which way, none says whether a trend exists at
+    all. Returns None when the sample is too short.
+    """
+    if len(bars) < 2 * n + 1:
+        return None
+    trs, pdm, ndm = [], [], []
+    for i in range(1, len(bars)):
+        h, low, pc = bars[i]["h"], bars[i]["l"], bars[i - 1]["c"]
+        trs.append(max(h - low, abs(h - pc), abs(low - pc)))
+        up = bars[i]["h"] - bars[i - 1]["h"]
+        dn = bars[i - 1]["l"] - bars[i]["l"]
+        pdm.append(up if (up > dn and up > 0) else 0.0)
+        ndm.append(dn if (dn > up and dn > 0) else 0.0)
+
+    def wilder(xs: list[float]) -> list[float]:
+        a = sum(xs[:n]) / n
+        out = [a]
+        for x in xs[n:]:
+            a = (a * (n - 1) + x) / n
+            out.append(a)
+        return out
+
+    atr_s, p_s, n_s = wilder(trs), wilder(pdm), wilder(ndm)
+    dxs: list[float] = []
+    for a, p, m in zip(atr_s, p_s, n_s, strict=True):
+        if a <= 0:
+            continue
+        pdi, ndi = 100 * p / a, 100 * m / a
+        total = pdi + ndi
+        dxs.append(100 * abs(pdi - ndi) / total if total else 0.0)
+    if len(dxs) < n:
+        return None
+    a = sum(dxs[:n]) / n
+    for x in dxs[n:]:
+        a = (a * (n - 1) + x) / n
+    return a
+
+
 def volume_ratio(bars: list[dict], n: int = 20) -> float | None:
     """Latest closed bar's activity as a multiple of the last `n` bars' average.
 

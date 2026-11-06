@@ -1,10 +1,10 @@
 """The market's state, in a handful of coarse buckets.
 
-The desk's verdict is a blend of nine opinions. This module answers a different
-question, the one a trader actually asks: *when the market looked like this
-before, what happened next?* To answer it the market has to be reduced to a
-small, countable state -- coarse enough that each state has a real sample, fine
-enough that the states differ.
+The desk's verdict is a blend of the directional specialists' opinions. This
+module answers a different question, the one a trader actually asks: *when the
+market looked like this before, what happened next?* To answer it the market has
+to be reduced to a small, countable state -- coarse enough that each state has a
+real sample, fine enough that the states differ.
 
 Four axes, chosen because each is a different kind of fact about the market and
 none of them is a restatement of another:

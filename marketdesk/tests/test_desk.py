@@ -87,6 +87,43 @@ def test_atr_none_when_too_short():
     assert ind.atr(_loaded(_bars(5)), 14) is None
 
 
+def test_atr_series_matches_atr_and_is_empty_when_short():
+    bars = _loaded(_bars(60))
+    series = ind.atr_series(bars, 14)
+    assert series and ind.atr(bars, 14) == pytest.approx(series[-1])
+    assert ind.atr_series(_loaded(_bars(5)), 14) == []
+
+
+def test_atr_percentile_ranks_against_own_history():
+    """A calm stretch followed by a violent one must read high, not merely
+    'above a fixed threshold' -- the whole reason the measure exists."""
+    calm = _loaded(_wave(300, period=17, amp=25.0))
+    spike = _loaded([*_wave(300, period=17, amp=25.0),
+                     {"openTime": "2026-12-01T00:00:00Z", "open": 3000.0,
+                      "high": 3200.0, "low": 2800.0, "close": 3000.0,
+                      "tickVolume": 100, "isOpen": False}])
+    lo, hi = ind.atr_percentile(calm, 14, 250), ind.atr_percentile(spike, 14, 250)
+    assert lo is not None and hi is not None
+    assert hi > lo and hi > 0.9
+
+
+def test_atr_percentile_none_when_history_too_short():
+    assert ind.atr_percentile(_loaded(_bars(30)), 14, 250, minimum=60) is None
+
+
+def test_adx_none_when_too_short():
+    assert ind.adx(_loaded(_bars(10)), 14) is None
+
+
+def test_adx_high_on_a_trend_and_low_on_chop():
+    """The one thing ADX is for: a directional series scores high, a sideways
+    one low. A measure that cannot separate these two is not a measure."""
+    trend = ind.adx(_loaded(_bars(120, step=8.0)), 14)
+    chop = ind.adx(_loaded(_wave(160, period=10, amp=40.0)), 14)
+    assert trend is not None and chop is not None
+    assert trend > 25 >= chop
+
+
 def test_macd_none_when_too_short():
     line, sig, hist = ind.macd([1, 2, 3])
     assert line is None and sig is None and hist is None
@@ -1768,6 +1805,49 @@ def test_correlation_is_silent_when_the_relationship_is_noise(tmp_path, monkeypa
     monkeypatch.setattr("desk.sources.fetch_summary", lambda: {"overview": {}})
     st = CorrelationAgent(s, shared, LLM("", s.models)).study("r1")
     assert st.score == 0.0, "no measured relationship -> no vote"
+
+
+def test_dxy_is_a_configured_peer():
+    """Gold's measured driver. If it is not in the peer list the agent cannot
+    measure it, whatever its rho is."""
+    assert "DXY" in Settings().peers
+
+
+def test_correlation_picks_dxy_when_it_is_the_strongest_measured_driver(tmp_path, monkeypatch):
+    """The agent chooses its driver by measured rho, so DXY wins only when it
+    really co-moves more than the peers -- never because it is listed first."""
+    from desk.agents.correlation import CorrelationAgent
+    from desk.llm import LLM
+    from desk.memory import SharedMemory
+    s = _settings(tmp_path)
+    s.peers = ("DXY", "USDJPY")
+    shared = SharedMemory(s.shared_db)
+
+    # Gold rises and falls; DXY mirrors it inversely; USDJPY is noise.
+    gold = [{"openTime": f"2026-01-01T{i:02d}:00:00Z", "open": 100, "high": 101,
+             "low": 99, "close": 100 + ((-1) ** i) * (i % 5), "tickVolume": 1,
+             "isOpen": 0} for i in range(60)]
+    dxy = [{"openTime": f"2026-01-01T{i:02d}:00:00Z", "open": 100, "high": 101,
+            "low": 99, "close": 100 + ((-1) ** (i + 1)) * (i % 5), "tickVolume": 1,
+            "isOpen": 0} for i in range(60)]
+    jpy = [{"openTime": f"2026-01-01T{i:02d}:00:00Z", "open": 150, "high": 151,
+            "low": 149, "close": 150 + (i % 3), "tickVolume": 1, "isOpen": 0}
+           for i in range(60)]
+    shared.save_candles(s.symbol, "1h", gold)
+    shared.save_quote(s.symbol, {"mid": 100.0, "day_diff_pct": 1.0,
+                                 "market_state": "open", "stale": False})
+    monkeypatch.setattr("desk.sources.fetch_candles",
+                        lambda sym, tf, limit=1000: {"DXY": dxy, "USDJPY": jpy}[sym])
+    monkeypatch.setattr("desk.sources.fetch_quote",
+                        lambda sym: {"mid": 150.0,
+                                     "day_diff_pct": -0.9 if sym == "DXY" else 0.1,
+                                     "market_state": "open"})
+    monkeypatch.setattr("desk.sources.fetch_summary", lambda: {"overview": {}})
+
+    st = CorrelationAgent(s, shared, LLM("", s.models)).study("r1")
+    assert st.payload["correlations"]["DXY"] == pytest.approx(-1.0, abs=0.05)
+    assert st.payload.get("driver") == "DXY", "the measured driver must lead, not the list order"
+    assert st.score > 0, "gold up while its driver falls is a measured bullish read"
 
 
 # ---- plan grading: stop vs target, first touch wins -------------------
@@ -4777,6 +4857,83 @@ def test_surprise_is_in_the_roster(tmp_path):
     from desk.agents.surprise import SurpriseAgent
 
     assert SurpriseAgent in ROSTER
+
+
+# ---- regime: trend strength and volatility, never a direction -----------
+
+def test_regime_is_in_the_roster(tmp_path):
+    from desk.agents import ROSTER
+    from desk.agents.regime import RegimeAgent
+
+    assert RegimeAgent in ROSTER
+
+
+def test_regime_labels_separate_trend_from_chop():
+    from desk.agents.regime import trend_label, vol_label
+
+    assert trend_label(30.0) == "trending"
+    assert trend_label(15.0) == "ranging"
+    assert trend_label(None) == "unknown"
+    assert vol_label(0.10) == "low"
+    assert vol_label(0.80) == "high"
+    assert vol_label(None) == "unknown"
+
+
+def test_regime_agent_casts_no_directional_vote(tmp_path, monkeypatch):
+    """The whole contract: it reports, it does not vote. A non-directional agent
+    that leaks a score into the tally is how the desk grows a silent bias."""
+    from desk.agents.regime import RegimeAgent
+    from desk.llm import LLM
+    from desk.orchestrator import Orchestrator
+
+    s = _settings(tmp_path)
+    bars = _bars(400, step=2.0)
+    desk = Orchestrator(s)
+    monkeypatch.setattr("desk.sources.fetch_candles", lambda sym, tf, limit=1000: bars)
+    monkeypatch.setattr("desk.sources.fetch_quote",
+                        lambda sym: {"mid": bars[-1]["close"], "market_state": "open",
+                                     "stale": False, "quote_age_s": 0})
+    monkeypatch.setattr("desk.sources.fetch_news", lambda symbol=None, max_results=25: [])
+    monkeypatch.setattr("desk.sources.fetch_calendar", lambda importance="high", limit=100: [])
+    monkeypatch.setattr("desk.sources.fetch_summary", lambda: {})
+    desk.run()
+
+    st = RegimeAgent(s, desk.shared, LLM("", s.models)).study("r")
+    assert st.score == 0.0 and st.stance == "neutral"
+    assert st.payload["adx"] is not None
+    assert st.payload["vol_percentile"] is not None
+    assert st.payload["trend"] in ("trending", "ranging", "normal", "unknown")
+    assert st.payload["vol"] in ("low", "normal", "high", "unknown")
+
+
+def test_regime_is_excluded_from_the_directional_tally(tmp_path, monkeypatch):
+    """A strong regime reading must not move the verdict. If it did, the desk
+    would be trading a volatility measurement as if it were a direction."""
+    from desk.orchestrator import Orchestrator
+
+    def run_once():
+        s = _settings(tmp_path)
+        bars = _bars(400, step=2.0)
+        desk = Orchestrator(s)
+        monkeypatch.setattr("desk.sources.fetch_candles", lambda sym, tf, limit=1000: bars)
+        monkeypatch.setattr("desk.sources.fetch_quote",
+                            lambda sym: {"mid": bars[-1]["close"], "market_state": "open",
+                                         "stale": False, "quote_age_s": 0})
+        monkeypatch.setattr("desk.sources.fetch_news", lambda symbol=None, max_results=25: [])
+        monkeypatch.setattr("desk.sources.fetch_calendar",
+                            lambda importance="high", limit=100: [])
+        monkeypatch.setattr("desk.sources.fetch_summary", lambda: {})
+        return desk.run()
+
+    run = run_once()
+    regime = next((x for x in run.studies if x.agent == "regime"), None)
+    assert regime is not None, "the regime agent must have run"
+    assert regime.score == 0.0 and regime.stance == "neutral"
+    # The tally sum must equal the sum over directional agents only. If the
+    # regime agent's weight leaked in, this would be larger by its weight.
+    directional = sum(a.weight for a in Orchestrator(_settings(tmp_path)).agents
+                      if a.name not in ("risk", "volatility", "regime"))
+    assert run.recommendation["weights_sum"] == pytest.approx(directional, abs=0.01)
 
 
 # ---- volume: a volatility input, never a direction ---------------------

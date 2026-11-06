@@ -29,7 +29,7 @@ an overrunning one is reported as timed-out, never as neutral.
               into the SHARED memory (SQLite).
  dispatch  →  the NEWS agent runs FIRST, alone: it pulls headlines + the
               economic calendar and publishes its study (including the
-              imminent-event list). Then the other 7 specialists wake
+              imminent-event list). Then the other 8 specialists wake
               concurrently, each reads the shared memory, computes its study,
               and publishes it back. The order is not cosmetic — the risk gate
               reads the news agent's event risk, and a gate that reads a
@@ -384,7 +384,7 @@ takes ~1 minute to wake; the keepawake ping is what prevents that. Telegram's
 push would wake it anyway, but the first press after a sleep would wait a minute.
 
 
-## The roster (9 agents)
+## The roster (10 agents)
 
 | agent | craft | weight | what it decides |
 |---|---|---|---|
@@ -393,10 +393,22 @@ push would wake it anyway, but the first press after a sleep would wait a minute
 | **momentum** | RSI + MACD | 1.2 | when a move is stretched (overbought ≠ sell) |
 | **levels** | S/R + Fibonacci | 1.5 | nearest real levels, every one tagged by provenance |
 | **volatility** | ATR + range | 0.8 | stop distance and the volatility regime |
+| **regime** | ADX + ATR percentile | — (no vote) | is there a trend, and is the tape tradeable? |
 | **news** | headlines + calendar | 1.5 | news tone and imminent event risk |
 | **surprise** | calendar actual vs forecast | 1.2 | what the printed number beat or missed, and by how much |
-| **correlation** | cross-market | 0.7 | is gold moving on its own or on the dollar? |
+| **correlation** | cross-market | 0.7 | is gold moving on its own or on the dollar? (DXY leads — rho ≈ −0.39) |
 | **risk** | the gate | — | may the desk trade at all? (fail-closed) |
+
+The **regime** agent is the only one that casts no directional vote. Every other
+specialist answers *which way*; it answers *whether there is anything to trade*.
+On the desk's own ten-year daily file, three standard methods each beat "always
+long" on the same bars in the lowest and highest volatility thirds and each lost
+to it in the middle third (EMA20/50 −0.176R, t=−2.88; 60-day momentum −0.234R,
+t=−3.69), and a 20-day breakout returned +0.318R below ADX 25 but +0.042R
+(t=0.35) above it. The agent publishes those two readings and nothing else. Its
+weight is 0.0 and it is excluded from the tally — a pattern in one instrument
+over one decade is a hypothesis, and the desk's rule is that a weight is earned
+by a measured edge, not awarded by one.
 
 ## Memory — two tiers
 
@@ -455,9 +467,9 @@ desk/
   config.py         settings, paths, the symbol/timeframes
   memory.py         SharedMemory (SQLite) + AgentMemory (private JSON)
   llm.py            Groq client (browser UA — Cloudflare needs it)
-  indicators.py     EMA/RSI/ATR/MACD/pivots/fib — None when too short
+  indicators.py     EMA/RSI/ATR/MACD/pivots/fib/ADX/ATR-percentile — None when too short
   sources/biquote.py candles, quote, news, calendar, summary
-  agents/           base + the 9 specialists + the ROSTER
+  agents/           base + the 10 specialists + the ROSTER
   orchestrator.py   the central manager (gather → dispatch → synthesise)
   daemon.py         the always-on process: chat + levels + readings
   bot.py            the Telegram chat client (long poll, or webhook)

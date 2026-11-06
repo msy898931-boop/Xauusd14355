@@ -75,6 +75,7 @@ AGENT = {
     "surprise": "المفاجآت",
     "correlation": "الارتباط",
     "risk": "المخاطر",
+    "regime": "النظام",
 }
 
 # ---- structure / market-structure words -------------------------------

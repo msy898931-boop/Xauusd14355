@@ -81,8 +81,13 @@ class Settings:
     neutral_band: float = NEUTRAL_BAND
     # Coarse -> fine. Agents may request a subset via their own `frames`.
     timeframes: tuple[str, ...] = TIMEFRAMES
-    # Symbols the correlation agent watches beside the traded one.
-    peers: tuple[str, ...] = ("XAGUSD", "EURUSD", "BTCUSD", "USOIL", "USDJPY")
+    # Symbols the correlation agent watches beside the traded one. DXY leads
+    # because it is the measured driver: gold's daily returns correlate with the
+    # dollar index at rho ~ -0.39 and stay there across all three thirds of the
+    # sample, while USDJPY -- the peer the agent used to be hardcoded to -- sits
+    # near 0.00. The agent still picks its driver by measured rho, so adding a
+    # symbol can only help it find the real one; it cannot force a vote.
+    peers: tuple[str, ...] = ("DXY", "XAGUSD", "EURUSD", "BTCUSD", "USOIL", "USDJPY")
     # How close a high-impact event must be, in hours, to close the gate. The
     # window is deliberately short: an event 20 hours out is not a reason to
     # refuse a setup that resolves on the 15-minute chart.

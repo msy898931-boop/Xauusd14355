@@ -7,6 +7,7 @@ from .correlation import CorrelationAgent
 from .levels import LevelsAgent
 from .momentum import MomentumAgent
 from .news_agent import NewsAgent
+from .regime import RegimeAgent
 from .risk import RiskAgent
 from .structure import StructureAgent
 from .surprise import SurpriseAgent
@@ -21,6 +22,7 @@ ROSTER: list[type[Agent]] = [
     MomentumAgent,
     LevelsAgent,
     VolatilityAgent,
+    RegimeAgent,
     NewsAgent,
     SurpriseAgent,
     CorrelationAgent,
@@ -28,5 +30,5 @@ ROSTER: list[type[Agent]] = [
 ]
 
 __all__ = ["Agent", "Study", "ROSTER", "AnalogAgent", "StructureAgent", "TrendAgent",
-           "MomentumAgent", "LevelsAgent", "VolatilityAgent", "NewsAgent",
-           "SurpriseAgent", "CorrelationAgent", "RiskAgent"]
+           "MomentumAgent", "LevelsAgent", "VolatilityAgent", "RegimeAgent",
+           "NewsAgent", "SurpriseAgent", "CorrelationAgent", "RiskAgent"]
