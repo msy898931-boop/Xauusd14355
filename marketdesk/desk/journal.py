@@ -85,6 +85,17 @@ class Trade:
             return None
         return abs(self.target - self.entry) / self.risk
 
+    @property
+    def money(self) -> float | None:
+        """Realised money. One lot is 100 oz, so 0.01 lot pays $1 per point.
+        None when the size was never recorded -- a trade with no size cannot
+        be turned into money, and guessing one would be inventing a result."""
+        if self.size is None or self.exit_price is None:
+            return None
+        pts = (self.exit_price - self.entry) if self.direction == "long" \
+            else (self.entry - self.exit_price)
+        return pts * self.size * 100.0
+
     def line(self) -> str:
         d = "شراء 🟢" if self.direction == "long" else "بيع 🔴"
         risk = self.risk
@@ -96,6 +107,8 @@ class Trade:
         if rr is not None:
             head += f" · R:R {rr:.2f}"
         head += f" · مخاطرة {risk:.2f} نقطة"
+        if self.size is not None:
+            head += f" · حجم {self.size:g}"
         if self.status == "open":
             if self.is_pending:
                 tail = "  ⏳ أمر معلّق — لسا ما تنفّذ"
@@ -109,6 +122,9 @@ class Trade:
             tail = f"  ⚪ يدوي ({self.result or 'مغلقة'})"
             if self.r_multiple is not None:
                 tail += f" — {self.r_multiple:+.2f}R"
+        money = self.money
+        if money is not None:
+            tail += f" · {money:+,.2f}$"
         if self.note:
             tail += f"\n     ملاحظة: {self.note}"
         return head + tail
@@ -196,6 +212,14 @@ class Journal:
             "UPDATE trades SET status='closed', result='manual', exit_price=?, "
             "r_multiple=?, closed_at=?, graded_at=?, note=COALESCE(?, note) WHERE id=?",
             (exit_price, r, _utcnow(), time.time(), note, trade_id))
+        return True
+
+    def set_size(self, trade_id: int, size: float) -> bool:
+        """Fill in a size the trade was recorded without. A trade with no size
+        still grades in R, but its money cannot be reported."""
+        if not self._rows("id=?", (trade_id,)):
+            return False
+        self._do_write("UPDATE trades SET size=? WHERE id=?", (size, trade_id))
         return True
 
     def _do_write(self, sql: str, args: tuple) -> None:
@@ -323,6 +347,13 @@ class Journal:
                      f"{st['wins']} ربح / {st['losses']} خسارة "
                      f"({st['win_rate']:.0%}) · توقّع <b>{st['expectancy_r']:+.2f}R</b> "
                      f"· مجموع {st['total_r']:+.2f}R · معامل ربح {pf_s}")
+            monies = [t.money for t in rows if t.money is not None]
+            if monies:
+                unpriced = len([t for t in rows if t.status == "closed"
+                                and t.money is None])
+                L.append(f"<b>المال:</b> {sum(monies):+,.2f}$"
+                         + (f" · {unpriced} صفقة بلا حجم مسجّل (ما انحسبت)"
+                            if unpriced else ""))
             L.append("<i>التقييم بالـR مو بالنقاط — نسبة ربح عالية بمضاعف "
                      "صغير بتخسر فلوس.</i>")
         else:

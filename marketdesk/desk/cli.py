@@ -171,6 +171,10 @@ def cmd_journal(args) -> int:
         ok = j.close_manual(args.id, args.exit, note=args.note)
         print("✅ انسكّرت" if ok else "ما لقيت الصفقة")
         return 0 if ok else 1
+    if sub == "size":
+        ok = j.set_size(args.id, args.size)
+        print("✅ تحدّد الحجم" if ok else "ما لقيت الصفقة")
+        return 0 if ok else 1
     if sub == "grade":
         from .orchestrator import Orchestrator
         desk = Orchestrator(_settings(args))
@@ -861,6 +865,10 @@ def build_parser() -> argparse.ArgumentParser:
     jc.add_argument("--exit", type=float, required=True)
     jc.add_argument("--note", default=None)
     jc.set_defaults(func=cmd_journal)
+    js = jsub.add_parser("size", help="fill in the size a trade was recorded without")
+    js.add_argument("id", type=int)
+    js.add_argument("--size", type=float, required=True)
+    js.set_defaults(func=cmd_journal)
     jg = jsub.add_parser("grade", help="walk the bars and settle open trades")
     jg.add_argument("--symbol", default=None)
     jg.add_argument("--tf", default="15m")

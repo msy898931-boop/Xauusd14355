@@ -141,3 +141,29 @@ def test_manual_close_is_comparable_to_an_automatic_one(j: Journal) -> None:
     assert t.status == "closed"
     assert t.r_multiple == pytest.approx(8 / 7, abs=0.01)
     assert j.close_manual(999, 1.0) is False
+
+
+def test_money_needs_a_size_and_a_size_can_be_filled_in_later(j: Journal) -> None:
+    """A trade with no recorded size still grades in R, but it cannot be
+    turned into money -- so `money` is None, not a guess."""
+    tid = j.add("XAUUSD", "short", 4042.0, 4050.0, 4033.0)
+    j.close_manual(tid, 4033.0)
+    t = j.all_trades()[0]
+    assert t.r_multiple == pytest.approx(9 / 8, abs=0.01)
+    assert t.money is None  # no size: money is unknown, not zero
+
+    assert j.set_size(tid, 0.01) is True
+    t = j.all_trades()[0]
+    # 0.01 lot pays $1 per point, and the trade made 9 points
+    assert t.money == pytest.approx(9.0)
+    assert j.set_size(999, 0.01) is False
+
+
+def test_report_totals_money_and_flags_unpriced_trades(j: Journal) -> None:
+    a = j.add("XAUUSD", "short", 4042.0, 4050.0, 4033.0, size=0.01)
+    j.close_manual(a, 4033.0)
+    b = j.add("XAUUSD", "long", 4055.0, 4048.0, 4083.0)  # no size
+    j.close_manual(b, 4063.0)
+    out = j.report()
+    assert "+9.00$" in out
+    assert "1 صفقة بلا حجم مسجّل" in out
