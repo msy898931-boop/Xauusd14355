@@ -358,11 +358,11 @@ class Actions:
             return ""
         try:
             from .backtest import load_daily
-            from .evidence import measure, summary_line
+            from .evidence import measure, rung_reach, summary_line
             bars = load_daily(csv)
             C = [{"o": b["open"], "h": b["high"], "l": b["low"], "c": b["close"]}
                  for b in bars if not b.get("isOpen")]
-            return summary_line(measure(C))
+            return summary_line(measure(C), rung_reach(C))
         except Exception:  # noqa: BLE001 - a missing record must not break the card
             return ""
 

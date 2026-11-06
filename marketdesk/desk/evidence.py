@@ -133,6 +133,77 @@ def _stats(rs: list[float]) -> tuple[float, float]:
     return mean, (mean / se if se else 0.0)
 
 
+LADDER = (1.0, 2.0, 3.0)
+_REACH_CACHE: dict[tuple, dict] = {}
+
+
+def _rungs_reached(C: list[dict], i: int, long: bool, risk: float,
+                   rungs: tuple[float, ...]) -> set[float]:
+    """Which rungs price touched before the stop, walking forward from bar i.
+
+    First touch wins and an ambiguous bar takes the stop, the same rule as
+    `_grade`: a bar that spans the stop and a rung is scored as the stop, so the
+    reach rates are conservative rather than flattering. This is what replaces
+    the hardcoded "reached 68% of the time" table -- a printed number must be a
+    measurement, not a constant.
+    """
+    e = C[i]["c"]
+    stop = e - risk if long else e + risk
+    out: set[float] = set()
+    for b in C[i + 1:i + 1 + HORIZON]:
+        if long:
+            if b["l"] <= stop:
+                break
+            for m in rungs:
+                if b["h"] >= e + m * risk:
+                    out.add(m)
+        else:
+            if b["h"] >= stop:
+                break
+            for m in rungs:
+                if b["l"] <= e - m * risk:
+                    out.add(m)
+    return out
+
+
+def rung_reach(C: list[dict], rungs: tuple[float, ...] = LADDER) -> dict[str, dict]:
+    """Per side, the measured share of trigger bars that reached each rung.
+
+    Same trigger and same bracket as `measure`, so a plan's ladder and its
+    evidence describe one setup. Returns {} for a side with no sample, and the
+    caller then prints no reach figure rather than a constant.
+    """
+    key = ("reach", len(C), C[0]["c"] if C else 0.0, C[-1]["c"] if C else 0.0, rungs)
+    hit = _REACH_CACHE.get(key)
+    if hit is not None:
+        return hit
+    atrs = _atr_series(C)
+    closes = [b["c"] for b in C]
+    counts: dict[str, dict[float, int]] = {"long": {m: 0 for m in rungs},
+                                           "short": {m: 0 for m in rungs}}
+    ns = {"long": 0, "short": 0}
+    for i in range(LOOKBACK + 14, len(C) - 1):
+        atr = atrs[i]
+        if not atr:
+            continue
+        risk = STOP_K * atr
+        window = C[i - LOOKBACK:i]
+        hi = max(b["h"] for b in window)
+        lo = min(b["l"] for b in window)
+        if closes[i] >= hi:
+            ns["long"] += 1
+            for m in _rungs_reached(C, i, True, risk, rungs):
+                counts["long"][m] += 1
+        elif closes[i] <= lo:
+            ns["short"] += 1
+            for m in _rungs_reached(C, i, False, risk, rungs):
+                counts["short"][m] += 1
+    out = {s: {"n": ns[s], "reach": {m: counts[s][m] / ns[s] for m in rungs}
+               if ns[s] else {}} for s in ("long", "short")}
+    _REACH_CACHE[key] = out
+    return out
+
+
 _CACHE: dict[tuple, Measurement] = {}
 
 
@@ -190,18 +261,32 @@ def measure(C: list[dict]) -> Measurement:
     return m
 
 
-def summary_line(m: Measurement) -> str:
+def summary_line(m: Measurement, reach: dict | None = None) -> str:
     """One Arabic line for the recommendation card: which side the shipped
     history supports, with the numbers. Returns "" when neither side has a
-    sample, so the caller prints nothing rather than a hollow claim."""
+    sample, so the caller prints nothing rather than a hollow claim.
+
+    `reach`, when given, is `rung_reach(...)`'s output: the measured share of
+    trigger bars that reached each rung. It is printed so the card carries the
+    same ladder evidence the plan card does -- one measurement, both cards."""
     if m.long.n == 0 and m.short.n == 0:
         return ""
     tag_l = "مدعوم" if m.long.supported else "غير مدعوم"
     tag_s = "مدعوم" if m.short.supported else "غير مدعوم"
-    return (f"الدليل المقاس: شراء n={m.long.n} إصابة={m.long.hit:.0%} "
+    line = (f"الدليل المقاس: شراء n={m.long.n} إصابة={m.long.hit:.0%} "
             f"توقع={m.long.mean_r:+.2f}R ({tag_l}) · "
             f"بيع n={m.short.n} إصابة={m.short.hit:.0%} "
             f"توقع={m.short.mean_r:+.2f}R ({tag_s})")
+    if reach:
+        def rungs(side: str) -> str:
+            r = (reach.get(side) or {}).get("reach") or {}
+            return " · ".join(f"{m_:.0f}R {r[m_]:.0%}" for m_ in (1.0, 2.0, 3.0)
+                              if m_ in r)
+        lr, sr = rungs("long"), rungs("short")
+        if lr or sr:
+            line += (f"\nوصول الأهداف (مقاس): شراء {lr or '—'} · "
+                     f"بيع {sr or '—'}")
+    return line
 
 
 def format_evidence(m: Measurement, *, lang: str = "ar") -> str:

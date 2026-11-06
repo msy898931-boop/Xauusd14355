@@ -1485,6 +1485,124 @@ def test_scenarios_render_never_key_errors_on_a_built_set(tmp_path):
     assert "XAUUSD" in html
 
 
+def test_plan_target_reach_is_measured_per_side_not_a_constant():
+    """The ladder's reach rates must be measured, and measured per side.
+
+    The plan used to print a hardcoded `RUNG_REACH = {1R: 68%, 2R: 54%,
+    3R: 41%}` -- the same number for both sides of every symbol, which is the
+    exact sin the module was written to remove (a constant wearing evidence's
+    clothes). It now measures each rung's touch rate on the shipped history, so
+    a side whose sample disagrees with the old table must print its own number,
+    and a side with no sample must print none."""
+    import desk.evidence as ev
+    from desk import history
+
+    C = history.shaped("XAUUSD")
+    if len(C) < 200:                       # the shipped file must be present
+        import pytest
+        pytest.skip("shipped XAUUSD history not available")
+    reach = ev.rung_reach(C)
+    for side in ("long", "short"):
+        r = reach[side]["reach"]
+        assert set(r) == {1.0, 2.0, 3.0}
+        # A reach rate is a probability, and the ladder must be monotone: a
+        # farther rung cannot be reached more often than a nearer one.
+        assert 0.0 <= r[3.0] <= r[2.0] <= r[1.0] <= 1.0
+    # The two sides are measured separately; they are not forced to agree.
+    assert reach["long"]["n"] > 0 and reach["short"]["n"] > 0
+    assert reach["long"]["reach"] != reach["short"]["reach"]
+
+    # A side with no trigger bars prints no reach figure at all.
+    empty = ev.rung_reach([{"o": 1, "h": 1, "l": 1, "c": 1}] * 10)
+    assert empty["long"]["reach"] == {} and empty["short"]["reach"] == {}
+
+
+def test_plan_prints_the_measured_reach_not_the_old_constant():
+    """End of the string: the card must carry the measurement, per side."""
+    from desk import history
+    from desk.plan import build_plan, format_plan
+
+    rows = history.daily_bars("XAUUSD")
+    if len(rows) < 200:
+        import pytest
+        pytest.skip("shipped XAUUSD history not available")
+    text = format_plan(build_plan(rows, rows[-1]["close"]))
+    assert "reached" in text and "of the time" in text
+    # The retired constant must not survive anywhere in the card.
+    assert "68% of the time" not in text
+
+
+# ---- acceptance criteria ----------------------------------------------
+
+def test_acceptance_is_wired_to_the_cli():
+    from desk.cli import build_parser
+    ns = build_parser().parse_args(["acceptance"])
+    assert ns.func.__name__ == "cmd_acceptance"
+
+
+def test_acceptance_checks_are_measured_not_asserted():
+    """Each row must carry a real measurement, and a None verdict must never be
+    printed as a pass. The edge row is allowed to fail -- on this market it does
+    -- but it must fail with the number that says so, not a shrug."""
+    from desk import history
+    from desk.acceptance import run_checks
+
+    if len(history.shaped("XAUUSD")) < 200:
+        import pytest
+        pytest.skip("shipped XAUUSD history not available")
+    checks = run_checks("XAUUSD", quality=False)
+    by_key = {c.key: c for c in checks}
+    # All eight rows are present except quality (skipped here).
+    assert set(by_key) == {"one_machine", "no_stored_numbers", "balance",
+                           "decision_rate", "calibration", "scenarios", "edge"}
+    for c in checks:
+        assert c.detail, f"{c.key} has no measurement detail"
+        assert c.target, f"{c.key} has no target"
+    # The rows that must pass on this build.
+    assert by_key["one_machine"].ok is True
+    assert by_key["no_stored_numbers"].ok is True
+    assert by_key["balance"].ok is True
+    assert by_key["decision_rate"].ok is True
+    assert by_key["scenarios"].ok is True
+    # The edge row is expected to fail, and the detail must say so plainly.
+    # It is an *outcome* row, not a structural one, so it does not fail the gate.
+    assert by_key["edge"].ok is False
+    assert by_key["edge"].gate is False
+    assert "t=" in by_key["edge"].detail
+    assert by_key["calibration"].gate is False
+
+
+def test_acceptance_render_marks_none_as_unmeasured_not_passed():
+    from desk.acceptance import Check, render
+
+    checks = [Check("x", "بند", None, "ما قيس", "هدف"),
+              Check("y", "بند٢", True, "قيس", "هدف")]
+    out = render(checks, "XAUUSD")
+    assert "⚠️" in out and "✅" in out
+    assert "1/1" in out          # None is excluded from the denominator
+    assert "ما انقاس: x" in out
+
+
+def test_acceptance_render_distinguishes_outcome_from_structural_failure():
+    from desk.acceptance import Check, render
+
+    out = render([Check("edge", "Edge", False, "t=-0.3", "t>2", gate=False),
+                  Check("one_machine", "الآلة", False, "اختلفت", "نفس القياس")],
+                 "XAUUSD")
+    assert "🟠" in out and "❌" in out
+    # Only the structural failure is called out as such.
+    assert "بند بنيوي فشل: one_machine" in out
+    assert "one_machine" in out.split("بند بنيوي فشل")[1]
+
+
+def test_acceptance_refuses_a_missing_history(tmp_path, monkeypatch):
+    from desk import acceptance, history
+    monkeypatch.setattr(history, "shaped", lambda sym="XAUUSD": [])
+    import pytest
+    with pytest.raises(ValueError):
+        acceptance.run_checks("XAUUSD", quality=False)
+
+
 # ---- walk-forward -----------------------------------------------------
 
 def test_walkforward_has_no_lookahead():

@@ -25,7 +25,6 @@ from . import indicators as ind
 LOOKBACK = ev.LOOKBACK   # the prior-range window the scan found evidence for
 STOP_K = ev.STOP_K       # stop at 1.5 x ATR
 LADDER = (1.0, 2.0, 3.0)
-RUNG_REACH = {1.0: 0.683, 2.0: 0.540, 3.0: 0.413}   # reached before the stop
 
 
 @dataclass
@@ -37,6 +36,9 @@ class Side:
     risk: float
     targets: list[float] = field(default_factory=list)
     evidence: dict = field(default_factory=dict)
+    # Measured share of trigger bars that reached each rung before the stop,
+    # keyed by the rung multiple. Empty when the side has no sample.
+    reach: dict = field(default_factory=dict)
 
     @property
     def risk_pct(self) -> float:
@@ -68,11 +70,16 @@ def build_plan(bars: list[dict], live: float) -> dict:
     measured = ev.measure(C)
     long_ev = measured.long.as_dict()
     short_ev = measured.short.as_dict()
+    # How often each rung was actually reached, per side -- measured on the same
+    # bars, replacing the hardcoded reach table that used to be printed as fact.
+    reach = ev.rung_reach(C)
 
     long_side = Side("long", hi, hi, hi - risk, risk,
-                     [hi + m * risk for m in LADDER], long_ev)
+                     [hi + m * risk for m in LADDER], long_ev,
+                     reach["long"]["reach"])
     short_side = Side("short", lo, lo, lo + risk, risk,
-                      [lo - m * risk for m in LADDER], short_ev)
+                      [lo - m * risk for m in LADDER], short_ev,
+                      reach["short"]["reach"])
     closes = [b["c"] for b in C]
     return {
         "live": live,
@@ -105,8 +112,9 @@ def _side_lines(s: Side) -> list[str]:
            f"    entry   {s.entry:,.2f}",
            f"    stop    {s.stop:,.2f}   ({s.risk:,.2f} pts = {s.risk_pct:.2f}%)"]
     for i, (m, t) in enumerate(zip(LADDER, s.targets, strict=True), 1):
-        reach = RUNG_REACH.get(m)
-        extra = f"   reached {reach:.0%} of the time" if reach else ""
+        reach = s.reach.get(m)
+        extra = (f"   reached {reach:.0%} of the time (n={s.evidence['n']})"
+                 if reach is not None else "")
         out.append(f"    target{i} {t:,.2f}   ({m:.0f}R, {m*s.risk:,.2f} pts){extra}")
     ev_d = s.evidence
     verdict = "مدعوم" if ev_d.get("supported") else "غير مدعوم — لا تعتمد عليه"

@@ -332,6 +332,25 @@ def cmd_walkforward(args) -> int:
     return 0
 
 
+def cmd_acceptance(args) -> int:
+    """Check the plan's eight acceptance criteria against the shipped history.
+
+    The plan document ends with a table of what "strong" means. This runs each
+    row as a computation and prints a scoreboard: met, not met, or not measured.
+    The edge row is expected to fail on this market -- the desk has no timing
+    edge and says so, which is itself the criterion.
+    """
+    from .acceptance import render, run_checks
+
+    checks = run_checks(args.symbol or "XAUUSD", quality=not args.no_quality)
+    print(render(checks, args.symbol or "XAUUSD"))
+    # Only a failed *structural* criterion, or one that could not be measured,
+    # is an error. A failed outcome row (no edge, not calibrated) is the desk
+    # reporting the market, not a defect -- the command still succeeds.
+    bad = [c for c in checks if c.gate and c.ok is not True]
+    return 0 if not bad else 1
+
+
 def cmd_scan(args) -> int:
     """Ask the prior question: is there any edge in the data at all?
 
@@ -804,6 +823,13 @@ def build_parser() -> argparse.ArgumentParser:
     wf.add_argument("--symbol", default=None)
     wf.add_argument("--folds", type=int, default=4)
     wf.set_defaults(func=cmd_walkforward)
+
+    acc = sub.add_parser(
+        "acceptance", help="check the plan's eight acceptance criteria")
+    acc.add_argument("--symbol", default=None)
+    acc.add_argument("--no-quality", action="store_true",
+                     help="skip the ruff/mypy/pytest subprocess gate")
+    acc.set_defaults(func=cmd_acceptance)
 
     bt = sub.add_parser("backtest", help="grade the method on stored daily bars")
     bt.add_argument("--symbol", default=None)
