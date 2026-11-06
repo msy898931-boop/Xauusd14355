@@ -133,6 +133,55 @@ def cmd_longdata(args) -> int:
     return 0
 
 
+def _journal(args):
+    """Open the owner's trade log, next to the shared store."""
+    from .journal import Journal
+    s = _settings(args)
+    return Journal(s.home / "journal.db")
+
+
+def cmd_journal(args) -> int:
+    """The owner's own trades, graded the way the desk grades its plans."""
+    j = _journal(args)
+    sub = getattr(args, "jcmd", None)
+    if sub == "add":
+        d = args.direction
+        if d in ("buy", "شراء"):
+            d = "long"
+        elif d in ("sell", "بيع"):
+            d = "short"
+        if d not in ("long", "short"):
+            print("الاتجاه لازم يكون long أو short (أو شراء/بيع).")
+            return 2
+        if args.stop is None:
+            print("الوقف مطلوب — بلا وقف ما في قياس بالـR.")
+            return 2
+        tid = j.add(args.symbol or _settings(args).symbol, d, args.entry,
+                    args.stop, args.target, args.size, note=args.note,
+                    source=args.source)
+        print(f"✅ انسجّلت الصفقة #{tid}")
+        print("  " + j.all_trades()[-1].line())
+        return 0
+    if sub == "close":
+        if args.exit is None:
+            print("لازم --exit (سعر الخروج).")
+            return 2
+        ok = j.close_manual(args.id, args.exit, note=args.note)
+        print("✅ انسكّرت" if ok else "ما لقيت الصفقة")
+        return 0 if ok else 1
+    if sub == "grade":
+        from .orchestrator import Orchestrator
+        desk = Orchestrator(_settings(args))
+        bars = desk.shared.load_candles(desk.settings.symbol, args.tf)
+        n = j.grade({args.tf: bars}, tf=args.tf)
+        print(f"عُيّن {n} صفقة من {args.tf}")
+        print(j.report())
+        return 0
+    # default: report
+    print(j.report())
+    return 0
+
+
 def cmd_levels(args) -> int:
     """One pass: alert once for each watched level the price has crossed, and
     once for each it is about to cross.
@@ -785,6 +834,29 @@ def build_parser() -> argparse.ArgumentParser:
     lv.add_argument("--every", type=float, default=60,
                     help="seconds between checks while holding (default 60)")
     lv.set_defaults(func=cmd_levels)
+
+    jr = sub.add_parser("journal", help="the owner's trades: add, close, grade, report")
+    jr.set_defaults(func=cmd_journal, jcmd=None, symbol=None)
+    jsub = jr.add_subparsers(dest="jcmd")
+    ja = jsub.add_parser("add", help="record a trade (stop is required)")
+    ja.add_argument("--symbol", default=None)
+    ja.add_argument("--direction", required=True, help="long/short (or شراء/بيع)")
+    ja.add_argument("--entry", type=float, required=True)
+    ja.add_argument("--stop", type=float, required=True)
+    ja.add_argument("--target", type=float, default=None)
+    ja.add_argument("--size", type=float, default=None)
+    ja.add_argument("--note", default=None)
+    ja.add_argument("--source", default=None)
+    ja.set_defaults(func=cmd_journal)
+    jc = jsub.add_parser("close", help="close a trade by hand at a price")
+    jc.add_argument("id", type=int)
+    jc.add_argument("--exit", type=float, required=True)
+    jc.add_argument("--note", default=None)
+    jc.set_defaults(func=cmd_journal)
+    jg = jsub.add_parser("grade", help="walk the bars and settle open trades")
+    jg.add_argument("--symbol", default=None)
+    jg.add_argument("--tf", default="15m")
+    jg.set_defaults(func=cmd_journal)
 
     sn = sub.add_parser("scenarios",
                         help="conditional scenarios from printed levels + the calendar")
