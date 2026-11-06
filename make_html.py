@@ -1,8 +1,8 @@
 """Render chart.html from chart_data.json -- a self-contained levels map."""
 import json
 import os
-
 import pathlib
+
 _OUT = pathlib.Path(os.environ.get("CHART_OUT_DIR")
                     or pathlib.Path(__file__).resolve().parent)
 D = json.load(open(_OUT / "chart_data.json"))
@@ -36,6 +36,11 @@ HTML = """<!DOCTYPE html>
   .tag{font-size:11px;padding:2px 7px;border-radius:6px;background:#1c2b47;color:#9fc0ff}
   .buy{color:var(--dem)}.sell{color:var(--sup)}.gold{color:var(--gold)}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .trig{border-radius:14px;padding:13px 15px;margin-bottom:14px;border:1px solid}
+  .trig.on{background:#0f2a17;border-color:#22c55e;color:#86efac}
+  .trig.off{background:#2a1214;border-color:#7f1d1d;color:#fca5a5}
+  .trig.wait{background:#1a2138;border-color:#334155;color:#cbd5e1}
+  .trig b{font-size:15px}
   @media(max-width:760px){.grid2{grid-template-columns:1fr}}
 </style>
 </head>
@@ -44,6 +49,7 @@ HTML = """<!DOCTYPE html>
 <div class="sub" id="sub"></div>
 
 <div class="card alert" id="evCard" style="display:none"></div>
+<div id="trigBanner"></div>
 
 <div class="card">
   <svg id="chart" viewBox="0 0 1080 540" preserveAspectRatio="xMidYMid meet"></svg>
@@ -67,6 +73,16 @@ HTML = """<!DOCTYPE html>
     <h3>🟢 مناطق الشراء (طلب)</h3>
     <table><thead><tr><th>المنطقة</th><th>القوة</th><th>ملاحظة</th></tr></thead>
     <tbody id="buyRows"></tbody></table>
+  </div>
+</div>
+
+<div class="card">
+  <h3>🎯 مراقبة الأبواب — هل أغلقت شمعة 15د وراء الخط؟</h3>
+  <table><thead><tr><th>الباب</th><th>الخط</th>
+  <th>الفريم</th><th>آخر إغلاق</th><th>الحالة</th></tr></thead>
+  <tbody id="watchRows"></tbody></table>
+  <div style="color:#8ea0bd;font-size:11.5px;margin-top:8px">
+    يُقرأ من آخر شمعة <b>مقفلة</b> — لا من السعر اللحظي. سعر يلمس الخط جوّا الشمعة ليس إغلاقاً.
   </div>
 </div>
 
@@ -177,6 +193,28 @@ if(D.event){const c=document.getElementById('evCard');c.style.display='';
   c.innerHTML='<b>⚠ حدث قريب</b> — '+e.name+' ['+e.currency+']'+h+fc+
     '<br><span style="color:#cbd5e1;font-size:12px">لا تنفيذ قبل مروره — '+
     'السبريد يتوسّع والاتجاه يضرب الطرفين.</span>';}
+// The door watch: has a CLOSED 15m bar ended beyond a printed door? A green
+// banner only on a real close-through. An untouched door is "waiting", never
+// dressed as an alert -- a false alarm trains the reader to ignore the real one.
+(function(){
+  const W=D.watch||[], box=document.getElementById('trigBanner');
+  if(!W.length){box.innerHTML='';return;}
+  const on=W.filter(w=>w.state==='triggered');
+  if(on.length){
+    box.innerHTML='<div class="trig on"><b>\u26a1 \u0628\u0627\u0628 \u062a\u0641\u0639\u0651\u0644</b> \u2014 '+
+      on.map(w=>`${w.k} \u0623\u063a\u0644\u0642\u062a 15\u062f \u0639\u0646\u062f <b>${fmt(w.close)}</b> (\u0627\u0644\u062e\u0637 ${fmt(w.on)}${w.bar_t?(' \u00b7 \u0634\u0645\u0639\u0629 '+w.bar_t):''})`).join(' \u00b7 ')+
+      '<br><span style="font-size:12.5px">\u0647\u0630\u0627 \u0625\u063a\u0644\u0627\u0642\u060c \u0644\u0627 \u0644\u0645\u0633\u0629 \u2014 \u0648\u0644\u0627 \u062a\u062f\u062e\u0644 \u0642\u0628\u0644 \u0645\u0631\u0648\u0631 \u0627\u0644\u062d\u062f\u062b \u0627\u0644\u0639\u0627\u0644\u064a \u0627\u0644\u062a\u0623\u062b\u064a\u0631.</span></div>';
+  } else {
+    box.innerHTML='<div class="trig wait"><b>\u23f3 \u0645\u0627 \u0641\u064a \u0625\u063a\u0644\u0627\u0642 \u0648\u0631\u0627\u0621 \u0627\u0644\u0628\u0627\u0628 \u0628\u0639\u062f</b> \u2014 '+
+      W.map(w=>`${w.k} \u0639\u0646\u062f <b>${fmt(w.on)}</b>`).join(' \u00b7 ')+
+      '<br><span style="font-size:12.5px">\u0622\u062e\u0631 \u0625\u063a\u0644\u0627\u0642 15\u062f: '+
+      fmt((W[0]||{}).close)+((W[0]||{}).bar_t?(' \u00b7 \u0634\u0645\u0639\u0629 '+(W[0]||{}).bar_t):'')+' \u2014 \u0644\u0645 \u064a\u062a\u062c\u0627\u0648\u0632 \u0623\u064a \u0628\u0627\u0628.</span></div>';
+  }
+  document.getElementById('watchRows').innerHTML=W.map(w=>
+    `<tr><td class="${w.cls}"><b>${w.k}</b></td><td>${fmt(w.on)}</td>`+
+    `<td>${w.frame}</td><td>${fmt(w.close)}</td>`+
+    `<td>${w.state==='triggered'?'<span class="buy">\u2705 \u0623\u063a\u0644\u0642 \u0648\u0631\u0627\u0621\u0647</span>':'<span style="color:#8ea0bd">\u23f3 \u0645\u0646\u062a\u0638\u0631</span>'}</td></tr>`).join('');
+})();
 document.getElementById('scRows').innerHTML=D.sc.map(s=>
   `<tr><td class="${s.cls}"><b>${s.k}</b></td><td>${fmt(s.on)}</td><td>${fmt(s.stop)}</td>
    <td>${fmt(s.tgt)}</td><td>${s.rr}</td><td>${fmt(s.inv)}</td></tr>`).join('');
