@@ -403,6 +403,45 @@ def test_scoreboard_grades_each_agent(tmp_path, monkeypatch):
     assert rows and all(r["correct"] == 1 for r in rows)
 
 
+def test_regime_expectancy_groups_plans_by_their_own_regime(tmp_path):
+    """The agent's claim must be falsifiable from the desk's own record: plans
+    are bucketed by the regime recorded on the run that produced them, so the
+    middle band's real R can be read off rather than asserted."""
+    from desk.memory import SharedMemory
+    from desk.scoreboard import Grader
+
+    shared = SharedMemory(tmp_path / "shared.db")
+    # Two regimes, each with a graded plan at a different R.
+    for rid, trend, vol, r in (("r1", "trending", "high", 1.5),
+                               ("r1b", "trending", "high", 0.5),
+                               ("r2", "ranging", "normal", -1.0)):
+        shared.save_run(rid, "XAUUSD", 1.0, 2.0, "long", 0.5, {"bias": {"direction": "up"}})
+        shared.publish_study(rid, "regime", "regime", "neutral", 0.5, 0.0,
+                             "s", {"trend": trend, "vol": vol})
+        shared.save_plan_outcome(rid, "4h", "long", 4000.0, 3990.0, 4030.0,
+                                 "target", 3, r)
+
+    lines = Grader(shared)._regime_expectancy()
+    joined = "\n".join(lines)
+    assert "متجه / مرتفع" in joined, "the trending/high bucket must appear"
+    assert "عرضي / عادي" in joined
+    assert "+1.00R" in joined and "-1.00R" in joined, "the averages must be the real ones"
+    assert any("2 خطة" in x for x in lines), "the sample size must be shown"
+
+
+def test_regime_expectancy_is_empty_without_regime_studies(tmp_path):
+    """Runs from before the agent existed carry no regime. The table must come
+    back empty rather than invent a bucket -- a claim with no data behind it is
+    not evidence for a vote."""
+    from desk.memory import SharedMemory
+    from desk.scoreboard import Grader
+
+    shared = SharedMemory(tmp_path / "shared.db")
+    shared.save_run("r1", "XAUUSD", 1.0, 2.0, "long", 0.5, {"bias": {"direction": "up"}})
+    shared.save_plan_outcome("r1", "4h", "long", 4000.0, 3990.0, 4030.0, "target", 3, 3.0)
+    assert Grader(shared)._regime_expectancy() == []
+
+
 def test_scoreboard_flat_bias_is_excluded(tmp_path, monkeypatch):
     from desk.scoreboard import Grader
     desk, _ = _run_with_history(tmp_path, monkeypatch, bias_score=0.0,

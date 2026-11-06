@@ -84,6 +84,7 @@ class Scoreboard:
     plans_skipped: int = 0
     plan_results: dict[str, int] = field(default_factory=dict)
     r_multiples: list[float] = field(default_factory=list)
+    regime_lines: list[str] = field(default_factory=list)
 
     @property
     def expectancy_r(self) -> float | None:
@@ -122,6 +123,10 @@ class Scoreboard:
                 if a.graded:
                     lines.append(f"  {ar.agent(a.agent)} +{a.horizon:<3} "
                                  f"{a.correct}/{a.graded} = {a.hit_rate:5.1%}")
+        if self.regime_lines:
+            lines.append("")
+            lines.append("التوقّع حسب نظام السوق (اختبار ادّعاء وكيل النظام):")
+            lines.extend(self.regime_lines)
         return "\n".join(lines)
 
 
@@ -206,6 +211,44 @@ class Grader:
             self.shared.save_plan_outcome(run_id, label, direction, entry, stop,
                                           target, result, bars, r_mult)
 
+    def _regime_expectancy(self) -> list[str]:
+        """Expectancy per market regime -- the test of the regime agent's claim.
+
+        The agent asserts that the middle volatility band is where a plan's edge
+        dies and that a strong trend weakens the breakout logic. This table is
+        the test, not a restatement: it groups every graded plan by the regime
+        recorded on its own run and reports the R average per bucket. It is
+        allowed to come back empty -- a claim that cannot be shown false is not
+        evidence, and the agent's weight stays 0.0 until this table says
+        otherwise.
+        """
+        outcomes = self.shared.load_plan_outcomes()
+        if not outcomes:
+            return []
+        cache: dict[str, dict] = {}
+        buckets: dict[str, list[float]] = {}
+        for o in outcomes:
+            r = o.get("r_multiple")
+            if r is None:
+                continue
+            rid = o["run_id"]
+            if rid not in cache:
+                studies = {s["agent"]: s for s in self.shared.load_studies(rid)}
+                cache[rid] = (studies.get("regime") or {}).get("payload") or {}
+            regime = cache[rid]
+            if not regime.get("trend") or not regime.get("vol"):
+                continue          # a run from before the agent existed
+            key = f"{ar.regime(regime['trend'])} / {ar.regime(regime['vol'])}"
+            buckets.setdefault(key, []).append(float(r))
+        if not buckets:
+            return []
+        lines = []
+        for key in sorted(buckets, key=lambda k: (-len(buckets[k]), k)):
+            rs = buckets[key]
+            note = "" if len(rs) >= 10 else "  ⚠ عيّنة صغيرة"
+            lines.append(f"  {key:<24} {sum(rs) / len(rs):+.2f}R على {len(rs)} خطة{note}")
+        return lines
+
     def grade(self) -> Scoreboard:
         board = Scoreboard()
         runs = self.shared.all_runs()
@@ -261,6 +304,7 @@ class Grader:
                 board.runs_graded += 1
 
         board.agents = list(agent_scores.values())
+        board.regime_lines = self._regime_expectancy()
         return board
 
     def _grade_agents(self, run_id: str, horizon: str, move: float,

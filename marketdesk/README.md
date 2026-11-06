@@ -141,6 +141,16 @@ The summary line reports the win count and the **expectancy in R**. That is the
 number that matters: a 60% win rate at 1.2R loses money, and only the R average
 shows it.
 
+### Expectancy by regime — the regime agent's claim, made falsifiable
+
+The same report closes with a table that groups every graded plan by the market
+regime recorded on the run that produced it, and prints the R average per bucket.
+This is the test of the regime agent's claim, not a restatement of it: if the
+middle volatility band really is where a plan's edge dies, the table shows a
+negative R there and the agent earns its keep; if it does not, the agent's weight
+stays 0.0. Runs from before the agent existed carry no regime and are excluded,
+so the table comes back empty rather than inventing a bucket.
+
 ## The gate, and why it is not a blunt instrument
 
 The risk gate is fail-closed, but a gate that blocks on *any* high-impact event
