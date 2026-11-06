@@ -13,6 +13,9 @@ python3 -m desk.cli run --json      # + machine-readable payload
 python3 -m desk.cli gather          # only pull data into shared memory
 python3 -m desk.cli memory          # inspect the shared memory
 python3 -m desk.cli agents          # list the roster
+python3 -m desk.cli journal         # the owner's own trades, graded in R
+python3 -m desk.cli journal add --direction long --entry 4055 --stop 4048 --target 4083
+python3 -m desk.cli journal grade --tf 15m   # settle open trades from the bars
 python3 -m desk.cli bot             # answer the chat's button presses
 python3 -m desk.cli menu            # publish the button menu to the chat
 python3 -m pytest tests -q          # 74 tests, keyless and offline

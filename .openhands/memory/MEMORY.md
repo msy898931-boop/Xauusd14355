@@ -209,4 +209,11 @@ Detail for all of these lives in `MARKETDESK.md`; the daily log is `2026-11-02.m
   **validation/dev tooling** (`desk acceptance`, `walkforward`, `calibration`,
   `gold`). The plan card now prints the study's **verdict** (supported / not) but
   no reach %, no n, no control baseline. Nothing deleted — a display switch.
-- Suite: **286 passed**; mypy clean (49 files); ruff clean.
+- Suite: **291 passed**; mypy clean (50 files); ruff clean.
+- ⭐ **A trade without a stop cannot be graded, so it is not a record.** Added
+  `desk journal add|close|grade` (`desk/journal.py`, `4293b00`) — the owner's own
+  trades, measured the desk's way: **first touch wins, a bar spanning both takes
+  the stop, expectancy in R not points**, an unresolved trade never a win. `add`
+  refuses a missing stop. `data/journal.db` is git-ignored (private, not the
+  blackboard). mypy caught 4 real `float | None` bugs here — the checker is a test
+  the tests do not run.
