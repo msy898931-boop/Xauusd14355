@@ -474,3 +474,189 @@ Detail → `2026-11-02.md`.
 - **`origin` had a stale embedded token** and hung `git push` on a password
   prompt (no output for 400s). Fix: `git remote set-url origin
   https://${GITHUB_TOKEN}@github.com/...` + `GIT_TERMINAL_PROMPT=0`.
+
+
+# --- Archived from MEMORY.md (condensed out 2026-11-02) ---
+
+## MarketDesk — lessons worth keeping in the index
+Detail for all of these lives in `MARKETDESK.md`; the daily log is `2026-11-02.md`.
+
+- ⭐ **A close is a fact about a closed bar, not about now.** Indicators read closed
+  bars; the price *compared against them* must be `live_price()`. Taking `closes[-1]`
+  (daily, up to a day old: 3938 vs live 4065) made `trend`/`structure` vote bear
+  56/56 while gold rose 3% — one bet placed 13×, not 13 losses.
+- ⭐ **When every outcome has the same sign, it is a bug, not a view.**
+- ⭐ **A live call needs live data.** Gate the ALERT on data age (`data_fresh()`,
+  `DESK_MAX_DATA_AGE_S` 3h, measured from `fetched_at` so a quiet market is not stale).
+- ⭐ **"Configured" is not "working"**; **a dead webhook is worse than none**; **"the
+  token works" ≠ "the owner sees the message"** (print the chat via `getChat`). The
+  session-local `TELEGRAM_BOT_TOKEN` here is 35 chars/no colon → `getMe` 404 while
+  the repo secret is a valid 46-char token; only `getMe` proves a token.
+- ⭐ **A currency tag is not a transmission channel.** Score a curated allowlist and
+  state what was dropped; the sign is per-release — never one sign for all.
+- **`actual=0.0` is a reading; a missing forecast is not a zero** → return `None`.
+- **Audit for data stored but never read before adding anything.**
+- ⭐ **"Alert once" is not "follow it".** `desk/active.py` holds the ONE plan in play
+  and reports only transitions (waiting→on_track→target/stopped/invalidated) + a
+  heartbeat; expires an unfired plan; drops one the fresh read contradicts. The
+  ledger fingerprint `symbol:verdict:score` let a COMPLETED plan suppress the next
+  same-direction trade forever → now `…:entry`. **The key was lying, not the code.**
+  Fresh-VM runner: `active_plan.json` rides the cached `marketdesk/data`.
+- ⭐ **Owner condition: keep the 10-year study OUT of my market analysis.** Base
+  reading/recommendation/scenarios ONLY on live desk output. Never cite historical
+  analogs, expectancy-R, n=47, or any 10y stat; never run `desk gold`.
+- **Open risks (accepted):** one data source (biquote); Actions cache is best-effort
+  (a duplicate alert is possible after eviction); scoreboard mixes pre/post-fix runs.
+- **`origin` had a stale embedded token** that hung `git push` on a password prompt;
+  fix = `git remote set-url origin https://${GITHUB_TOKEN}@github.com/...` +
+  `GIT_TERMINAL_PROMPT=0`.
+- ⭐ **A level is not a position.** The desk printed entry/stop/target in points and
+  never a lot size or dollar risk — fatal on a small account. XAUUSD 1 lot = 100 oz
+  ($1 move = $100), min lot 0.01 → a 42-pt gold stop risks **$42 = 21% of $200**;
+  at 1% risk the widest affordable stop is **2 points**. `desk/account.py` sizes
+  every plan/scenario (`lots = risk/(stop_dist×100)`, **floored** — never rounded
+  up), refuses an unsizeable setup **with the number that proves it**, and takes a
+  hard `DESK_MAX_STOP_POINTS` cap. `desk account` shows it; `DESK_BALANCE=0` keeps
+  points-only. **A stop is not a risk until it meets a lot size and a balance.**
+- ⭐ **A tolerance the desk cannot satisfy is a tolerance it refuses forever.** The
+  owner's stop window (10-15 pts) is *exactly* the 15m/30m ATR band (measured:
+  5m 5.7 · 15m 10.5 · 30m 14.7 · 1h 20.2 · 4h 36.9 · 1d 72.3) — the stop IS the
+  frame ATR, so the desk had to reach down to those frames AND prefer the level
+  whose frame fits the window over a nearer one it would only refuse (falling back
+  to nearest when nothing fits). Adding a limit is half the job; the search must be
+  able to produce something inside it.
+
+
+## MarketDesk — later lessons (2026-11-05)
+
+- ⭐ **A metric too bad to be true must be checked, not "fixed".** The board read
+  **0/16 plans, -1.00R**; it looked like a grader bug, but tracing the raw plans
+  showed the desk was short while gold rallied ~5% and was stopped out 16 times.
+  The "fix" would have relabelled every loss `unfilled` — the same sin as grading
+  direction-only. Verify against the data before touching the metric.
+- **Two entry semantics, deliberately:** `scenarios.py` `entry` = a **breakout
+  trigger**; `recommendation.entry` = **market entry at the current price**
+  (`mid@issue == entry`). Fill logic must handle both or it hides losses.
+- ⭐ **A once-a-day message belongs on a SCHEDULE, not a resident process.**
+  The Render free instance for this desk got **suspended** (750 instance-hour
+  cap; `/health` → 503 "suspended by its owner"), taking the daemon down with it.
+  The GitHub cron kept running. So the daily map moved to `desk.cli map
+  --once-a-day` in `marketdesk-watch.yml` (date stamped in the cached DESK_HOME),
+  verified `map sent: True` then `map already sent today`. Do NOT add a second
+  free Render service to "back up" the first — that is what trips the cap.
+- ⭐ **The git remote's embedded token goes stale.** A push failed with
+  `could not read Password for 'https://ghu_...'`; fix is
+  `git remote set-url origin https://${GITHUB_TOKEN}@github.com/<o>/<r>.git`.
+- ⭐ **A map is a view, not new math — and "manipulation" is not measurable.**
+  `desk/map.py` clusters `indicators.pivots` into ZONES (0.25% ≈ 1×15m ATR, min 2
+  touches), splits them by the live price into sell (above) / buy (below) zones,
+  and adds liquidity = repeated highs/lows (where stops sit). Supply/demand and
+  S/R are the SAME prices; do not sell them as two findings. Say "liquidity",
+  never "manipulation". The map carries no buy/sell instruction. Sent ONCE a day
+  by the daemon at `DESK_MAP_HOUR`, keyed on the calendar date, marked sent only
+  on success (a dead token retries, not loses the day).
+- ⭐ **An alert must carry the trade, not just the level.** `Level` has
+  `call_side/stop/target/why`; a level clearing the desk's R:R floor (1.5) renders
+  `🟢 اشترِ — stop, target, R:R, why`, else it stays a silent marker (never invent
+  conviction). `from_scenarios` must get the owner's window + account, or the
+  alert's stop won't match sizing.
+
+## MarketDesk — the always-on chart and the alert (2026-11-06)
+
+- ⭐ **Serving a directory serves everything under it.** The chart URL was
+  `http.server` from the repo root, so the owner's **trade journal**
+  (`marketdesk/data/journal.db`) and `.openhands/memory/MEMORY.md` both returned
+  **200** to anyone with the link, for hours before anyone noticed. Build into
+  `chart_live/` and serve that alone; private paths now 404. **A URL is a
+  capability** — what it may reach is a security decision, not a formatting one.
+- ⭐ **An alert whose line moves is not an alert.** Watching the desk's own 5m
+  scenario triggers made the "door" drift **4,073.15 → 4,071.65 → 4,070.67 in 40
+  minutes**, so it could fire and un-fire on its own. Watch **printed** levels
+  (pivots, stop clusters, round numbers), and read state from the **closed** bar
+  — same lesson as the open bar that started all this.
+- ⭐ **A rule that does not clear the spread is not a rule.** Simulated the
+  owner's own "buy on a 15m close over 4,071": 43 trades, 35% win, **+0.19
+  pts/trade before costs vs a 0.25-pt spread** (worse with wider stops). Measure
+  the rule he names *before* building the alert for it — and say "no edge".
+- ⭐ **4,071 is the middle, not a level.** Printed above: 4,073.15/4,076.38/
+  4,081.34; below: 4,068.35/4,067.40 (stop cluster)/4,065.89. A 4-pt stop under
+  it lands *on the cluster* — the stop is placed where price goes to hunt it.
+- **Telegram cannot deliver here** (`getMe` → Not Found, no chat id;
+  `desk telegram` → UNREADABLE) though `available` reads True. Alerts go where
+  the owner already looks (chart banner + `alerts.log`), not a promise.
+- **Check the JS, do not eyeball it.** Node was available; stubbing `document`
+  proved the banner goes green only on a real trigger.
+- `chart_server.py` loops gather→rebuild→sleep (`CHART_REFRESH_S`, 120s) into
+  `chart_live/`; a failed pass logs and retries. Verified 296 tests, mypy 50
+  files, ruff clean. Commits `b1efa58` · `3b2119d` · `21ce3f0`.
+
+
+
+# --- Archived from MEMORY.md (2026-11-02, acceptance/scoreboard era) ---
+
+## MarketDesk — Phase 0 closed + the acceptance scoreboard (2026-11-02, late)
+
+- ⭐ **An acceptance criterion is a computation or it is decoration.** The plan
+  doc's eight "when is this strong?" rows are now `desk acceptance`
+  (`desk/acceptance.py`), each printing its measured number vs its target. Same
+  lesson as the open-bar / budget / scoreboard ones — *the doc row, not the code,
+  was the thing that could lie.*
+- ⭐ **Split a gate row from an outcome row.** `Check.gate`: structural rows (one
+  machine, no stored numbers, balance, decision rate, scenarios, quality) exit
+  nonzero — defects. Market-outcome rows (`edge`, `calibration`) are marked 🟠 and
+  do NOT fail the command: this market has no timing edge (t=−0.28) and the desk is
+  not calibrated (27.3 pts), and *saying so is the criterion*. **A CI gate that goes
+  red for a true market fact is a gate people learn to ignore.**
+- ⭐ **The last hardcoded number shown as fact is gone.** `plan.py`'s
+  `RUNG_REACH = {1R:0.683, 2R:0.540, 3R:0.413}` was one table for *both sides of
+  every symbol*. Now `evidence.rung_reach(C)` measures per side (gold: long
+  73/65/58%, short 47/18/12%), using `measure`'s own first-touch / ambiguous-bar-
+  takes-the-stop rule; a side with no sample returns `{}` and the card prints no
+  figure. `summary_line(m, reach)` carries it onto the recommendation card, so
+  `/plan` and `/recommend` read one engine (the acceptance check verifies the two
+  loaders' bar sets AND the evidence dicts agree).
+- **Push:** this remote has **no credential helper** — a bare `git push` prompts
+  for a username and hangs. Push with the injected token inline:
+  `git push "https://x-access-token:${GITHUB_TOKEN}@github.com/<o>/<r>.git" main:main`,
+  then `git fetch <same-url> main:refs/remotes/origin/main` to sync the tracking ref.
+- ⚠ **Standing owner condition vs. this task's acceptance criteria — RESOLVED.**
+  The owner said keep the 10-year study OUT of the market reading / plan /
+  recommendations / scenarios. Section 6 of the plan the owner asked for still
+  *requires* study-based validation (walk-forward edge, calibration). Resolution
+  (`b6f0bed`): one flag, `Settings.show_study` (`DESK_SHOW_STUDY`, default OFF),
+  gates every study statistic on every live surface; the study lives on as
+  **validation/dev tooling** (`desk acceptance`, `walkforward`, `calibration`,
+  `gold`). The plan card now prints the study's **verdict** (supported / not) but
+  no reach %, no n, no control baseline. Nothing deleted — a display switch.
+- Suite: **291 passed**; mypy clean (50 files); ruff clean.
+- ⭐ **A level's side is where it SITS, not what pivot it was.** The map tagged
+  liquidity "above"/"below" by swing-high vs swing-low; once price trades past a
+  level the two disagree and the map states the opposite of what it measured (3
+  of 4 live levels wrong). Label from the price, after the positional filter. And
+  the regression test must be **directional** — a symmetric zig-zag passes on the
+  broken code, so the test, not the code, was the bug.
+- ⭐ **A number typed into a render rots.** The chart generator carried literal
+  level lists and a literal "NFP in ~5 hours" alert, still showing the 4,052-4,083
+  shelf hours after price left it. Zones now come from `map.build`, setups from
+  `scenarios.build`, the event from the calendar. Two shapes to watch:
+  `map.build` reads shared-memory bars, `scenarios.build` reads the agent shape.
+- ⭐ **A trade without a stop cannot be graded, so it is not a record.** Added
+  `desk journal add|close|grade` (`desk/journal.py`, `4293b00`) — the owner's own
+  trades, measured the desk's way: **first touch wins, a bar spanning both takes
+  the stop, expectancy in R not points**, an unresolved trade never a win. `add`
+  refuses a missing stop. `data/journal.db` is git-ignored (private, not the
+  blackboard). mypy caught 4 real `float | None` bugs here — the checker is a test
+  the tests do not run.
+- ⭐ **The log must judge the PLAN at the moment it is written, not the week
+  after.** The desk refuses its own setups below `min_rr` (1.5), but the owner's
+  trades entered the journal unexamined — three of four shorts planned to risk 8
+  points to make 5, and the week still read as a clean 7/7 (+$56, +6.87R). Under
+  1R a trade needs a win rate above 50% just to break even, so `weak_reward`
+  (planned_r < 1) now marks the line, `journal add` prints the arithmetic and the
+  fix, and the report counts them and names the worst — closed **or not**, because
+  a weak plan is a fact about the plan, not about the settled record. And
+  `Trade.money` returns **None** when the size was never recorded, never a guess:
+  a report that silently drops half the money reads as if that half did not
+  happen. `journal size <id> --size N` fills it in later. (One lot = 100 oz, so
+  0.01 lot = $1/point — the owner's size.)
+
