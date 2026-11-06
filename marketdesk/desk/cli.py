@@ -26,6 +26,8 @@ def _settings(args) -> Settings:
 
 
 def cmd_run(args) -> int:
+    from .memory import json_default
+
     desk = Orchestrator(_settings(args))
     run = desk.run()
     text = render(run, lang=args.lang)
@@ -34,7 +36,7 @@ def cmd_run(args) -> int:
         print(json.dumps({"run_id": run.run_id, "verdict": run.verdict,
                           "score": run.score, "recommendation": run.recommendation,
                           "studies": [s.to_dict() for s in run.studies]},
-                         ensure_ascii=False, indent=2))
+                         ensure_ascii=False, indent=2, default=json_default))
     if getattr(args, "send", False):
         from .notify import Notifier
 

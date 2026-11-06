@@ -82,6 +82,21 @@ def _now() -> float:
     return time.time()
 
 
+def json_default(o):
+    """Serialise a desk object that `json` does not know.
+
+    A stored recommendation carries computed objects -- a `Sizing`, and inside
+    the scenarios a `Sizing` per setup. They are the honest output, so they are
+    written, not dropped. A dataclass becomes its fields; anything else falls
+    back to `str` rather than failing the write. Lives here because this is the
+    module that persists payloads; the CLI imports it so the two agree."""
+    from dataclasses import asdict, is_dataclass
+
+    if is_dataclass(o) and not isinstance(o, type):
+        return asdict(o)
+    return str(o)
+
+
 class SharedMemory:
     """The blackboard. Every agent reads it; only published studies are facts."""
 
@@ -235,7 +250,7 @@ class SharedMemory:
             "ON CONFLICT(run_id) DO UPDATE SET finished_at=excluded.finished_at, "
             "verdict=excluded.verdict, score=excluded.score, payload=excluded.payload",
             (run_id, symbol, started, finished, verdict, score,
-             json.dumps(payload, ensure_ascii=False))))
+             json.dumps(payload, ensure_ascii=False, default=json_default))))
 
     def recent_runs(self, limit: int = 10) -> list[dict]:
         with closing(self._conn()) as c:

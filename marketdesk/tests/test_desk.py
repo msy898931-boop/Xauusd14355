@@ -1391,6 +1391,100 @@ def test_ruin_is_wired_to_the_account_cli():
     assert ns.func.__name__ == "cmd_account"
 
 
+# ---- end-to-end integration -------------------------------------------
+
+def test_full_run_wires_every_layer_without_a_network(tmp_path, monkeypatch):
+    """One run, every layer, no network.
+
+    The unit tests each prove one piece. This proves the pieces are actually
+    connected: a run gathers candles, dispatches the agents, synthesises a
+    verdict, builds the scenarios from the SAME frames, stores the payload, and
+    the stored payload round-trips back out of SQLite. It is the test that would
+    have caught a scenario set that rendered but was never built, or a
+    recommendation that could not be stored because it carried a dataclass.
+    """
+    from desk import sources
+    from desk.agents.base import Study
+    from desk.orchestrator import Orchestrator
+    from desk.report import render
+
+    s = _settings(tmp_path)
+    # A deterministic market: the wave gives structure, levels and pivots.
+    bars = _wave(200, period=20, amp=20, base=3000.0)
+    monkeypatch.setattr(sources, "fetch_candles", lambda sym, tf, **k: list(bars))
+    monkeypatch.setattr(sources, "fetch_quote",
+                        lambda sym: {"mid": 3000.0, "stale": False, "market_state": "open"})
+
+    # Stub the agents so the test never calls the model, but keep the real
+    # orchestrator plumbing: dispatch, synthesis, scenarios, storage.
+    desk = Orchestrator(s)
+    for a in desk.agents:
+        monkeypatch.setattr(a, "study", lambda run_id, a=a: Study(
+            agent=a.name, kind=a.kind, stance="bull", confidence=0.5,
+            score=0.4, summary="stub", payload={}))
+
+    run = desk.run()
+    assert run.verdict in ("long", "short", "no-trade")
+    rec = run.recommendation
+    # Every layer must have contributed to the one recommendation dict.
+    assert rec.get("gather"), "the gather report must be on the recommendation"
+    assert "scenarios" in rec, "the scenarios must be built by the run, not a button"
+    assert rec.get("bias"), "the implied bias must be recorded even on no-trade"
+    assert rec.get("per_frame_bias") is not None
+    assert rec.get("allowed") in (True, False)
+    # The card renders the scenarios too -- both halves of the machine.
+    card = render(run)
+    assert "=== " in card
+    assert "السيناريوهات" in card
+
+    # The payload must round-trip through SQLite even though it carries objects
+    # (a Sizing, scenarios). This is the bug that made `run --json` crash.
+    import json
+    stored = desk.shared.recent_runs(1)[0]
+    assert stored["run_id"] == run.run_id
+    payload = json.loads(stored["payload"])
+    assert payload["bias"]["direction"] in ("up", "down", "flat")
+    assert "scenarios" in payload
+
+
+def test_stored_recommendation_round_trips_with_a_sizing(tmp_path):
+    """A recommendation carrying a `Sizing` dataclass must survive the write.
+
+    `save_run` json-dumps the payload; a dataclass is not serialisable, so a
+    sized run used to raise on storage. The shared `json_default` turns it into
+    its fields."""
+    from desk.account import size_plan
+    from desk.memory import SharedMemory
+
+    m = SharedMemory(tmp_path / "s.db")
+    sz = size_plan(balance=200.0, risk_pct=2.0, entry=3000.0, stop=2995.0,
+                   target=3010.0)
+    m.save_run("r1", "XAUUSD", 0.0, 1.0, "long", 0.5,
+               {"sizing": sz, "scenarios": {"live": 3000.0}})
+    import json
+    payload = json.loads(m.recent_runs(1)[0]["payload"])
+    assert payload["sizing"]["lots"] == sz.lots
+    assert payload["scenarios"]["live"] == 3000.0
+
+
+def test_scenarios_render_never_key_errors_on_a_built_set(tmp_path):
+    """The render is fed exactly what `build` returns -- no hand-made dict.
+
+    `render` dereferences `sc['symbol']`; if `build` ever stopped returning it,
+    the button would crash at press time. Build, then render, and require the
+    symbol to be in the output."""
+    import datetime as dt
+
+    from desk import scenarios as S
+
+    frames = {"1h": _wave_frame(base=3960.0)}
+    sc = S.build(frames, 3960.0, calendar=[],
+                 now=dt.datetime(2026, 11, 3, tzinfo=dt.UTC), symbol="XAUUSD")
+    assert sc["symbol"] == "XAUUSD"
+    html = S.render(sc)
+    assert "XAUUSD" in html
+
+
 # ---- walk-forward -----------------------------------------------------
 
 def test_walkforward_has_no_lookahead():
