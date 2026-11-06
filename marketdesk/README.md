@@ -52,6 +52,9 @@ an overrunning one is reported as timed-out, never as neutral.
 | `python3 -m desk.cli daemon --web` | the same, but Telegram pushes (inbound `/health`) |
 | `python3 -m desk.cli agents` | the roster, with weights |
 | `python3 -m desk.cli memory` | what is in the shared store |
+| `python3 -m desk.cli journal add` | record one of the owner's trades |
+| `python3 -m desk.cli journal grade` | settle open trades against the bars |
+| `python3 -m desk.cli journal watch` | grade and alert on each resolution |
 
 ## Quality gates
 
@@ -150,6 +153,55 @@ middle volatility band really is where a plan's edge dies, the table shows a
 negative R there and the agent earns its keep; if it does not, the agent's weight
 stays 0.0. Runs from before the agent existed carry no regime and are excluded,
 so the table comes back empty rather than inventing a bucket.
+
+## The owner's journal — his trades, graded the same way
+
+The desk grades its own calls; the journal grades the trades the owner actually
+took. He records one, and the desk settles it and tells him the result without
+him having to remember to check.
+
+**Record a trade in the chat**, in Arabic or English, in any order:
+
+```
+سجل بيع 4073 وقف 4077 هدف 4064 حجم 0.01
+/trade sell 4073 stop 4077 target 4064
+```
+
+The stop is required: a trade without a stop cannot be graded in R, and a trade
+that cannot be graded is a story, not a measurement. Size is optional — without
+it the R is still real, but the money is not reported. `📒 سجل صفقاتي` shows the
+record.
+
+**Grading runs on every watch pass**, on 5m bars by default (`DESK_TRADES_TF`) —
+a scalp is decided on a fast frame, so grading a four-point stop on 15m bars
+would miss the touch. The rules are the same ones the desk's own scoreboard uses:
+
+* First touch wins, and a bar that spans both takes the **stop**.
+* An unresolved trade is never counted as a win.
+* The result is reported in **R**, with money beside it when a size is known.
+* A trade whose target sits closer than its stop is flagged the moment it is
+  written down — the same `min_rr` rule the desk refuses to break itself.
+
+When a trade resolves, a message goes to the chat with the outcome, the R, the
+money, and the running record.
+
+### Why the trade travels through git, not the cache
+
+The journal lives in `data/`, which is git-ignored, and a GitHub runner is a
+fresh VM with no disk. The watch workflow carries `data/` in the Actions cache,
+but the **bot workflow is restore-only** — a trade recorded there would be
+written to a throwaway VM and gone before the next watch pass could grade it.
+
+Letting the bot save the cache too does **not** fix it: two workflows writing
+`desk-state-<run_id>` keys race, and `restore-keys` picks the newest, so the
+bot's snapshot — the one holding the new trade — can be silently discarded.
+
+So a trade typed in the chat is appended to the git-tracked
+`marketdesk/trade_inbox.jsonl` and committed by the bot workflow, and the watch
+adopts it on its next pass. Appends never clobber, so two runs cannot lose each
+other's lines the way cache snapshots can. A `uid` makes the adopt idempotent, so
+running it on every pass is safe whether or not the cache survived. The commit
+happens only on a pass that recorded a trade, so it is a handful a week.
 
 ## The gate, and why it is not a blunt instrument
 
@@ -429,6 +481,10 @@ by a measured edge, not awarded by one.
   the agents read from.
 * **Private memory** (`data/agents/<name>/memory.json`) is one agent's own store:
   its running notes, its last verdict, its run count. Bounded at 50 notes.
+* **The trade inbox** (`marketdesk/trade_inbox.jsonl`) is the one piece of state
+  that is *not* under `data/`. It is git-tracked on purpose: it carries a trade
+  the owner typed in the chat from the throwaway bot runner to the watch pass
+  that grades it. See "The owner's journal" above for why the cache cannot.
 
 ## The rules the desk enforces
 
@@ -451,6 +507,8 @@ by a measured edge, not awarded by one.
 | `DESK_MODEL` | `openai/gpt-oss-120b` | Groq model for narration |
 | `DESK_BUDGET_S` | `60` | wall-clock ceiling for one run |
 | `DESK_WATCH_SCENARIOS` | `1` | also watch the scenario triggers, not just the plan |
+| `DESK_TRADES_TF` | `5m` | frame the owner's trades are graded on |
+| `DESK_INBOX` | `marketdesk/trade_inbox.jsonl` | where a chat-recorded trade is staged for the watch |
 | `DESK_WEBHOOK_BASE` | — | public base URL; set → Telegram pushes instead of polling |
 | `DESK_WEBHOOK_SECRET` | — | shared secret Telegram echoes back on every push |
 | `GROQ_API_KEY` | — | unset → deterministic summaries, no model |
@@ -467,7 +525,7 @@ serve them onward. Keep it that way.
 ## Tests
 
 ```bash
-python3 -m pytest tests -q      # 19 tests, keyless and offline
+python3 -m pytest tests -q      # 325 tests, keyless and offline
 ```
 
 ## Layout

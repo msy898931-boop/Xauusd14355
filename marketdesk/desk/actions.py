@@ -78,7 +78,7 @@ class Actions:
     # are plain text -- a study summary can contain `&` -- and are escaped as
     # one block, because a raw `&` makes Telegram reject the whole message.
     MARKUP_ACTIONS = ("recommend", "market", "plan", "levels", "help", "menu",
-                      "chart", "scenarios", "map")
+                      "chart", "scenarios", "map", "journal")
 
     def __init__(self, settings: Settings, orchestrator=None):
         self.settings = settings
@@ -98,13 +98,110 @@ class Actions:
                 "\n"
                 "📊 تحليل الآن · 🎯 التوصية\n"
                 "🎬 السيناريوهات · 🗺️ خريطة اليوم\n"
-                "📈 الخطة الكاملة\n"
+                "📈 الخطة الكاملة · 🔔 المستويات\n"
                 "📉 الشارت · ⏱️ السوق\n"
-                "🔔 المستويات · 📚 دراسة الذهب\n"
-                "📋 آخر تقرير · 📈 معدل النجاح\n"
-                "❓ مساعدة\n"
+                "📋 آخر تقرير · 📒 سجل صفقاتي\n"
+                "📈 معدل النجاح · ❓ مساعدة\n"
+                "\n"
+                "<b>لتسجيل صفقة</b> اكتب مباشرة:\n"
+                "<code>سجل بيع 4073 وقف 4077 هدف 4064</code>\n"
+                "<i>«دراسة الذهب» تكتب: ذهب</i>\n"
                 "\n"
                 "<i>كل ردّ معه زر «🔄 تحديث» و«🏠 القائمة».</i>")
+
+    # ---- the owner's journal -------------------------------------------
+    def record_trade(self, text: str) -> str:
+        """Record a trade the owner typed, so the scheduled pass can grade it.
+
+        This is the missing half of the journal: the store lives in `data/`,
+        which is git-ignored and only survives between runner jobs through the
+        action cache. So a trade the owner types HERE is the one that reaches the
+        scheduled grader -- there is no other path from his phone to the runner.
+
+        Format (any of these), Arabic or English, in any order after the verb:
+            سجل بيع 4073 وقف 4077 هدف 4064
+            /trade sell 4073 stop 4077 target 4064
+        The stop is required: a trade without a stop cannot be graded in R, and
+        an ungradeable trade is a story, not a measurement. `حجم`/`size` is
+        optional; without it the R is still real but the money is not reported.
+        """
+        # The verb set lives in `bot` beside the text map, so a verb added there
+        # is stripped here too -- two copies would drift, and the one that forgot
+        # a verb would parse "صفقة" as a price.
+        from .bot import TRADE_VERBS
+        from .journal import Journal
+
+        toks = (text or "").replace("،", " ").split()
+        toks = [w for w in toks if w not in TRADE_VERBS]
+        direction = None
+        for w in toks:
+            low = w.lower()
+            if low in ("بيع", "short", "sell") or w == "🔴":
+                direction = "short"
+            elif low in ("شراء", "long", "buy") or w == "🟢":
+                direction = "long"
+        entry = stop = target = size = None
+        field = None
+        for w in toks:
+            low = w.lower()
+            if low in ("وقف", "stop", "stoploss", "sl"):
+                field = "stop"
+                continue
+            if low in ("هدف", "target", "tp", "ربح"):
+                field = "target"
+                continue
+            if low in ("حجم", "size", "lot", "لوت"):
+                field = "size"
+                continue
+            if low in ("دخل", "دخول", "entry", "سعر"):
+                field = "entry"
+                continue
+            try:
+                val = float(w)
+            except ValueError:
+                continue
+            if field == "stop":
+                stop = val
+            elif field == "target":
+                target = val
+            elif field == "size":
+                size = val
+            elif field == "entry":
+                entry = val
+            elif entry is None:
+                entry = val
+        if direction is None or entry is None or stop is None:
+            return ("⚠️ ما فهمت الصفقة. اكتب مثلاً:\n"
+                    "<code>سجل بيع 4073 وقف 4077 هدف 4064</code>\n"
+                    "الوقف مطلوب — بدونه ما ينقاس بالـR.")
+        j = Journal(self.settings.home / "journal.db")
+        tid = j.add(self.settings.symbol, direction, entry, stop, target, size,
+                    source="telegram")
+        trade = [x for x in j.all_trades() if x.id == tid][0]
+        # Also append it to the git-tracked inbox. The bot runs on a throwaway VM
+        # whose `data/` is not saved, so this file -- committed by the bot
+        # workflow -- is the ONLY way the trade reaches the scheduled grader. The
+        # journal write above is what the immediate reply reads; the inbox is
+        # what survives.
+        try:
+            from . import inbox
+            inbox.append({"symbol": trade.symbol, "direction": trade.direction,
+                          "entry": trade.entry, "stop": trade.stop,
+                          "target": trade.target, "size": trade.size,
+                          "opened_at": trade.opened_at, "source": "telegram"})
+        except Exception:  # noqa: BLE001 - a full disk must not lose the reply
+            pass
+        out = ["✅ <b>انسجّلت الصفقة</b>", trade.line()]
+        if trade.weak_reward:
+            gain = abs((trade.target or trade.entry) - trade.entry)
+            out.append(f"⚠️ المضاعف {trade.planned_r:.2f}R أقل من 1 — بتخاطر "
+                       f"{trade.risk:.2f} لتكسب {gain:.2f}.")
+        out.append("<i>المكتب رح يقيّمها لحاله ويرسلك لما تنحسم.</i>")
+        return "\n".join(out)
+
+    def journal_report(self) -> str:
+        from .journal import Journal
+        return Journal(self.settings.home / "journal.db").report()
 
     def run(self, action: str) -> str:
         handler = {
@@ -121,13 +218,14 @@ class Actions:
             "chart": self.chart,
             "help": self.help,
             "menu": self.menu_text,
+            "journal": self.journal_report,
         }.get(action)
         if handler is None:
             return f"⚠️ زر غير معروف: {_e(action)}"
-        text = handler()
+        out = handler()
         if action in self.MARKUP_ACTIONS:
-            return text
-        return escape(text)
+            return out
+        return escape(out)
 
     # ---- the long history file -----------------------------------------
     def _long_csv(self):

@@ -185,3 +185,83 @@ def test_a_trade_that_risks_more_than_it_pays_is_flagged(j: Journal) -> None:
     assert "⚠️" not in sound_t.line()
     assert "3 صفقة" not in j.report() and "1 صفقة بمضاعف أقل من 1" in j.report()
     assert weak == 1 and sound == 2 and no_target == 3
+
+
+def test_grade_resolved_returns_the_settled_trades(j: Journal) -> None:
+    """The watch loop needs the trades, not just the count, so it can say WHICH
+    one resolved. The count is unchanged, so existing callers still work."""
+    j.add("XAUUSD", "long", 4063.0, 4055.0, 4073.0, opened_at="2026-11-06T08:25:00Z")
+    j.add("XAUUSD", "short", 4090.0, 4100.0, 4060.0, opened_at="2026-11-06T08:25:00Z")
+    j.add("XAUUSD", "long", 4063.0, 4055.0, 4083.0, opened_at="2026-11-06T08:25:00Z")
+    bars = [
+        {"open_time": "2026-11-06T08:30:00Z", "high": 4070, "low": 4065},
+        {"open_time": "2026-11-06T08:35:00Z", "high": 4076, "low": 4070},   # long #1 target
+        {"open_time": "2026-11-06T08:40:00Z", "high": 4101, "low": 4088},   # short #2 stop
+        {"open_time": "2026-11-06T08:45:00Z", "high": 4085, "low": 4080},   # long #3 target
+    ]
+    resolved = j.grade_resolved({"5m": bars}, tf="5m")
+    assert [t.id for t in resolved] == [1, 2, 3]
+    assert {t.id: t.result for t in resolved} == {1: "target", 2: "stop", 3: "target"}
+    assert j.grade({"5m": bars}, tf="5m") == 0          # nothing left to settle
+    assert j.stats()["open"] == 0
+
+
+def test_resolution_message_says_what_it_was_worth_in_r_first(j: Journal) -> None:
+    """The alert is about a trade the owner is in, so it must state the outcome
+    and the R, then the money, then the running record."""
+    from desk.journal import resolution_message
+
+    j.add("XAUUSD", "short", 4073.0, 4077.0, 4064.0, size=0.01,
+          opened_at="2026-11-06T19:10:00Z")
+    bars = [{"open_time": "2026-11-06T19:15:00Z", "high": 4074, "low": 4062}]
+    resolved = j.grade_resolved({"5m": bars}, tf="5m")
+    assert len(resolved) == 1
+    text = resolution_message(resolved[0], j.stats())
+    assert "صفقة #1" in text and "ربحت" in text
+    assert "+2.25R" in text and "+9.00$" in text
+    assert "السجل" in text
+
+    j.add("XAUUSD", "long", 4063.0, 4055.0, 4083.0, size=0.01,
+          opened_at="2026-11-06T19:20:00Z")
+    bars2 = [{"open_time": "2026-11-06T19:25:00Z", "high": 4064, "low": 4050}]
+    lost = j.grade_resolved({"5m": bars2}, tf="5m")
+    assert lost and "خسرت" in resolution_message(lost[0], j.stats())
+
+
+def test_a_trade_typed_in_the_chat_is_parsed_and_recorded(tmp_path, monkeypatch) -> None:
+    """The store lives in `data/`, which is git-ignored, so the only path from
+    the owner's phone to the scheduled grader is the chat. If the parser drops a
+    field the trade is silently wrong, so each field is asserted."""
+    from desk.actions import Actions
+    from desk.bot import action_for_text
+    from desk.config import Settings
+
+    monkeypatch.setenv("DESK_HOME", str(tmp_path))
+    s = Settings()
+    assert action_for_text("سجل بيع 4073 وقف 4077 هدف 4064") == "trade"
+    assert action_for_text("/trade sell 4073 stop 4077") == "trade"
+    assert action_for_text("تحليل") == "analysis"       # the map still works
+    assert action_for_text("كلام فاضي") == "menu"
+
+    a = Actions(s)
+    out = a.record_trade("سجل بيع 4073 وقف 4077 هدف 4064 حجم 0.01")
+    assert "انسجّلت" in out and "بيع" in out
+    j = Journal(s.home / "journal.db")
+    t = j.all_trades()[0]
+    assert (t.direction, t.entry, t.stop, t.target, t.size) == \
+        ("short", 4073.0, 4077.0, 4064.0, 0.01)
+    assert t.source == "telegram"
+
+
+def test_a_trade_message_without_a_stop_is_refused_not_guessed(tmp_path, monkeypatch) -> None:
+    """A stop cannot be invented -- an ungradeable trade is a story, not a
+    measurement -- so the reply asks for it instead of recording a half-trade."""
+    from desk.actions import Actions
+    from desk.config import Settings
+
+    monkeypatch.setenv("DESK_HOME", str(tmp_path))
+    s = Settings()
+    a = Actions(s)
+    out = a.record_trade("سجل بيع 4073 هدف 4064")
+    assert "الوقف مطلوب" in out
+    assert Journal(s.home / "journal.db").all_trades() == []

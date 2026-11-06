@@ -160,6 +160,11 @@ class Settings:
     # goes silent exactly when the market is deciding something. Set
     # DESK_WATCH_SCENARIOS=0 to watch the plan alone.
     watch_scenarios: bool = os.environ.get("DESK_WATCH_SCENARIOS", "1") != "0"
+    # The frames the owner's journal is graded against. A scalp is decided on a
+    # fast frame, so 5m is the default: grading a four-point stop on 15m bars
+    # would miss the touch entirely. `trades --tf` overrides for one run.
+    trades_timeframes: tuple[str, ...] = tuple(
+        os.environ.get("DESK_TRADES_TF", "5m").split(","))
     # ---- position sizing -------------------------------------------------
     # The account the desk sizes every plan for. A level and a stop say where to
     # act; they say nothing about how many lots, and a small account is where

@@ -5668,3 +5668,31 @@ def test_from_scenarios_vetoes_a_trade_against_the_higher_frame_trend(tmp_path):
                 f"a trade against the {drift:+.0f} regime must not be actionable: {level.why}")
             assert "عكس اتجاه" in level.why, (
                 "the veto must say why it withheld the call")
+
+
+def test_a_trade_typed_in_the_chat_is_recorded_through_the_bot(tmp_path, monkeypatch):
+    """The full path: a typed message -> the router -> record_trade -> the store.
+
+    This is the only route from the owner's phone to the scheduled grader (`data/`
+    is git-ignored, so nothing he records locally reaches the runner). The unit
+    test covers the parser; this one proves the message actually gets there, with
+    the real `Actions` and a real journal on disk."""
+    from desk.bot import TelegramBot
+    from desk.journal import Journal
+
+    updates = [{"update_id": 90,
+                "message": {"text": "سجل بيع 4073 وقف 4077 هدف 4064 حجم 0.01",
+                            "chat": {"id": 933571066}}}]
+    bot, _ = _fake_bot(tmp_path, monkeypatch, updates=updates)
+    sent = []
+    monkeypatch.setattr(TelegramBot, "send",
+                        lambda self, text, **kw: sent.append(text) or True)
+
+    out = bot.poll()
+    assert out["handled"] == ["trade"]
+    assert sent and "انسجّلت" in sent[0]
+    trades = Journal(_settings(tmp_path).home / "journal.db").all_trades()
+    assert len(trades) == 1
+    t = trades[0]
+    assert (t.direction, t.entry, t.stop, t.target) == ("short", 4073.0, 4077.0, 4064.0)
+    assert t.source == "telegram"

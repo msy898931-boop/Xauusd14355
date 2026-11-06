@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS trades (
     status TEXT NOT NULL DEFAULT 'open',
     result TEXT, exit_price REAL, bars INTEGER, r_multiple REAL,
     closed_at TEXT, graded_at REAL,
-    pending INTEGER NOT NULL DEFAULT 0, fill_time TEXT
+    pending INTEGER NOT NULL DEFAULT 0, fill_time TEXT, uid TEXT
 );
 """
 
@@ -45,6 +45,10 @@ CREATE TABLE IF NOT EXISTS trades (
 MIGRATIONS = (
     ("pending", "ALTER TABLE trades ADD COLUMN pending INTEGER NOT NULL DEFAULT 0"),
     ("fill_time", "ALTER TABLE trades ADD COLUMN fill_time TEXT"),
+    # `uid` is the inbox's idempotency key: it lets a trade recorded on one
+    # runner be copied onto another without duplicating. Nullable because every
+    # trade written before the inbox existed has none.
+    ("uid", "ALTER TABLE trades ADD COLUMN uid TEXT"),
 )
 
 
@@ -70,6 +74,7 @@ class Trade:
     graded_at: float | None = None
     pending: int = 0
     fill_time: str | None = None
+    uid: str | None = None
 
     @property
     def is_pending(self) -> bool:
@@ -172,23 +177,32 @@ class Journal:
             target: float | None = None, size: float | None = None,
             opened_at: str | None = None, note: str | None = None,
             source: str | None = None, run_id: str | None = None,
-            pending: bool = False) -> int:
+            pending: bool = False, uid: str | None = None) -> int:
         """Record a trade. The stop is required: a trade without a stop cannot
         be graded in R, and a trade that cannot be graded is a story.
 
         `pending=True` is a limit/stop order the market has not filled yet. It
         is stored, but `grade` will not settle it until price actually reaches
-        the entry -- a target on an unfilled order is a plan, not a result."""
+        the entry -- a target on an unfilled order is a plan, not a result.
+
+        `uid` is the inbox idempotency key. It is stored only so a trade copied
+        from another runner is never copied twice; a trade the owner records
+        directly leaves it null."""
         opened_at = opened_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         with closing(self._conn()) as c:
             cur = c.execute(
                 "INSERT INTO trades (symbol, direction, entry, stop, target, size, "
-                "opened_at, note, source, run_id, status, pending) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,'open',?)",
+                "opened_at, note, source, run_id, status, pending, uid) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,'open',?,?)",
                 (symbol.upper(), direction, entry, stop, target, size, opened_at,
-                 note, source, run_id, 1 if pending else 0))
+                 note, source, run_id, 1 if pending else 0, uid))
             c.commit()
             return int(cur.lastrowid or 0)
+
+    def has_uid(self, uid: str) -> bool:
+        """Whether a trade with this inbox key is already stored. The inbox sync
+        asks this before copying, so a second pass cannot duplicate a trade."""
+        return bool(self._rows("uid=?", (uid,)))
 
     def _rows(self, where: str = "", args: tuple = ()) -> list[Trade]:
         q = "SELECT * FROM trades"
@@ -251,14 +265,25 @@ class Journal:
     def grade(self, bars_by_tf: dict[str, list[dict]], tf: str = "15m",
               max_bars: int = 2000) -> int:
         """Walk every open trade forward and settle the ones that resolved.
+        Returns how many trades were settled; see `grade_resolved` for the
+        trades themselves."""
+        return len(self.grade_resolved(bars_by_tf, tf=tf, max_bars=max_bars))
+
+    def grade_resolved(self, bars_by_tf: dict[str, list[dict]], tf: str = "15m",
+                       max_bars: int = 2000) -> list[Trade]:
+        """Settle every open trade the bars have resolved, and return them.
 
         `bars_by_tf[tf]` must be CLOSED bars, oldest first, each with `open_time`,
         `high`, `low`. First touch wins; a bar that spans both takes the stop.
-        Returns how many trades were settled."""
+
+        The settled trades are returned rather than only counted so a caller can
+        tell the owner *which* trade resolved and how it went. Re-reading them
+        from the store (rather than mutating the in-memory copies) keeps this the
+        single source of truth: what is reported is exactly what was written."""
         bars = bars_by_tf.get(tf) or []
         if not bars:
-            return 0
-        settled = 0
+            return []
+        settled_ids: list[int] = []
         for t in self.open_trades():
             start = _parse(t.opened_at)
             if start is None:
@@ -287,14 +312,17 @@ class Journal:
                     (b["high"] >= target) if long else (b["low"] <= target))
                 if hit_stop:
                     self._settle(t.id, "stop", t.stop, n, -1.0)
-                    settled += 1
+                    settled_ids.append(t.id)
                     break
                 if hit_tgt and target is not None:
                     r = (abs(target - t.entry) / risk) if risk else None
                     self._settle(t.id, "target", target, n, r)
-                    settled += 1
+                    settled_ids.append(t.id)
                     break
-        return settled
+        if not settled_ids:
+            return []
+        want = set(settled_ids)
+        return [t for t in self.all_trades() if t.id in want]
 
     def _mark_filled(self, trade_id: int, fill_time: str) -> None:
         """The order was reached: it is now a live trade, graded from here."""
@@ -382,6 +410,33 @@ class Journal:
 
 def _utcnow() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def resolution_message(t: Trade, stats: dict | None = None) -> str:
+    """The alert for a trade that just resolved.
+
+    It says what happened and what it is worth, in R first and money second,
+    because R is the only number comparable across trades. The running record is
+    attached when it is known, so one message answers both "how did my trade do"
+    and "how is the method doing"."""
+    won = t.result == "target" or (t.r_multiple is not None and t.r_multiple > 0)
+    icon = "✅" if won else "❌"
+    head = "ربحت" if won else "خسرت"
+    d = "شراء" if t.direction == "long" else "بيع"
+    lines = [f"{icon} <b>صفقة #{t.id} انحسمت — {head}</b>",
+             f"{d} {t.symbol} · دخل {t.entry:,.2f} · خرج {t.exit_price:,.2f}"
+             if t.exit_price is not None else f"{d} {t.symbol}"]
+    if t.r_multiple is not None:
+        lines.append(f"النتيجة: <b>{t.r_multiple:+.2f}R</b>")
+    money = t.money
+    if money is not None:
+        lines.append(f"المال: <b>{money:+,.2f}$</b> (حجم {t.size:g})")
+    if stats and stats.get("n"):
+        lines.append(f"<i>السجل: {stats['n']} صفقة · {stats['win_rate']:.0%} ربح "
+                     f"· توقّع {stats['expectancy_r']:+.2f}R</i>")
+    if t.note:
+        lines.append(f"ملاحظة: {t.note}")
+    return "\n".join(lines)
 
 
 def _parse(stamp: str | None):

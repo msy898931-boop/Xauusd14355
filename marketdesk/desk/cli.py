@@ -189,6 +189,31 @@ def cmd_journal(args) -> int:
         print(f"عُيّن {n} صفقة من {args.tf}")
         print(j.report())
         return 0
+    if sub == "watch":
+        # The scheduled loop: grade the owner's open trades against fresh bars
+        # and alert on each one that resolved. Reads candles already in shared
+        # memory, so it costs no network call and no model.
+        from . import inbox
+        from .journal import resolution_message
+        from .notify import Notifier
+        from .orchestrator import Orchestrator
+
+        s = _settings(args)
+        desk = Orchestrator(s)
+        inbox.sync(j)
+        tfs = tuple(args.tf.split(",")) if getattr(args, "tf", None) \
+            else s.trades_timeframes
+        bars_by_tf = {tf: desk.shared.load_candles(s.symbol, tf) for tf in tfs}
+        resolved = j.grade_resolved(bars_by_tf, tf=tfs[0])
+        stats = j.stats()
+        n = Notifier(s)
+        sent = []
+        for t in resolved:
+            if n.send(resolution_message(t, stats)):
+                sent.append(t.id)
+        print(f"عُيّن {len(resolved)} صفقة · أُرسل {len(sent)} تنبيه "
+              f"· مفتوحة {stats.get('open', 0)}")
+        return 0
     # default: report
     print(j.report())
     return 0
@@ -879,6 +904,13 @@ def build_parser() -> argparse.ArgumentParser:
     jg.add_argument("--symbol", default=None)
     jg.add_argument("--tf", default="15m")
     jg.set_defaults(func=cmd_journal)
+
+    jw = jsub.add_parser("watch", help="grade the owner's trades and alert on each "
+                                      "one that resolved (the scheduled loop)")
+    jw.add_argument("--symbol", default=None)
+    jw.add_argument("--tf", default=None,
+                    help="frames to grade against, comma-separated (default 5m)")
+    jw.set_defaults(func=cmd_journal)
 
     sn = sub.add_parser("scenarios",
                         help="conditional scenarios from printed levels + the calendar")

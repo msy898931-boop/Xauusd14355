@@ -56,8 +56,14 @@ concurrency:
   group: marketdesk-bot
   cancel-in-progress: false
 
+# `contents: write` is for ONE thing: committing the trade inbox. A trade the
+# owner types in the chat is written on this runner's throwaway VM, and `data/`
+# is not saved from here (the watch owns that cache key). So the trade is
+# appended to the git-tracked `trade_inbox.jsonl` and committed, which is what
+# carries it to the scheduled grader. The commit happens only on a pass that
+# actually recorded a trade, so it is a handful of commits a week.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   poll:
@@ -67,6 +73,9 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the inbox commit can rebase on a concurrent push.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -143,3 +152,20 @@ jobs:
             exit 0
           fi
           exit $code
+
+      # A trade the owner typed was appended to the git-tracked inbox on this
+      # runner. `data/` is NOT saved from this workflow (the watch owns that
+      # cache key, and two writers race), so committing the inbox is the only
+      # way the trade reaches the scheduled grader. Nothing is committed on a
+      # pass that recorded no trade, so this is a handful of commits a week.
+      - name: Commit any recorded trades
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          git add marketdesk/trade_inbox.jsonl 2>/dev/null || true
+          git diff --staged --quiet && { echo "no trade recorded"; exit 0; }
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "trade: record a trade from the chat"
+          # A concurrent push (the watch, or keepalive) would reject this; rebase
+          # and retry once. The inbox is append-only, so a rebase cannot conflict.
+          git push || { git pull --rebase --autostash && git push; }
