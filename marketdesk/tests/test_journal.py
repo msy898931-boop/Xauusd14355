@@ -77,6 +77,63 @@ def test_a_trade_recorded_after_the_fact_grades_on_history(j: Journal) -> None:
     assert t.r_multiple == pytest.approx(1.25, abs=0.01)
 
 
+def test_a_pending_order_is_not_a_trade_until_price_reaches_it(j: Journal) -> None:
+    """A limit order is a plan. Counting its target before the market fills it
+    would book a win the owner never had."""
+    j.add("XAUUSD", "long", 4065.0, 4055.0, 4076.0,
+                opened_at="2026-11-06T09:00:00Z", pending=True)
+    assert j.all_trades()[0].is_pending
+    above = [{"open_time": "2026-11-06T09:00:00Z", "high": 4075.0, "low": 4070.0}]
+    assert j.grade({"5m": above}, tf="5m") == 0
+    assert j.all_trades()[0].is_pending  # untouched: price never came down to it
+    assert j.stats() == {"n": 0}
+
+    filled = above + [
+        {"open_time": "2026-11-06T09:05:00Z", "high": 4072.0, "low": 4063.0},
+        {"open_time": "2026-11-06T09:10:00Z", "high": 4077.0, "low": 4070.0},
+    ]
+    assert j.grade({"5m": filled}, tf="5m") == 1
+    t = j.all_trades()[0]
+    assert not t.is_pending
+    assert t.fill_time == "2026-11-06T09:05:00Z"
+    assert t.result == "target" and t.r_multiple == pytest.approx(1.10, abs=0.01)
+
+
+def test_a_pending_order_that_fills_and_stops_the_same_bar_takes_the_stop(
+        j: Journal) -> None:
+    """The bar that reaches the entry may also run through the stop. Read it as
+    filled-then-stopped: the conservative order, as everywhere else here."""
+    j.add("XAUUSD", "long", 4065.0, 4055.0, 4076.0,
+          opened_at="2026-11-06T09:00:00Z", pending=True)
+    bars = [{"open_time": "2026-11-06T09:00:00Z", "high": 4066.0, "low": 4050.0}]
+    assert j.grade({"5m": bars}, tf="5m") == 1
+    t = j.all_trades()[0]
+    assert t.result == "stop" and t.r_multiple == -1.0
+
+
+def test_an_old_store_gains_the_new_columns_without_losing_a_row(
+        tmp_path: Path) -> None:
+    """`CREATE TABLE IF NOT EXISTS` leaves an existing file alone, so the new
+    columns are migrated in. The owner's record must survive the upgrade."""
+    import sqlite3
+    p = tmp_path / "old.db"
+    c = sqlite3.connect(p)
+    c.executescript(
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, "
+        "direction TEXT, entry REAL, stop REAL, target REAL, size REAL, "
+        "opened_at TEXT, note TEXT, source TEXT, run_id TEXT, status TEXT, "
+        "result TEXT, exit_price REAL, bars INTEGER, r_multiple REAL, "
+        "closed_at TEXT, graded_at REAL);"
+        "INSERT INTO trades (symbol,direction,entry,stop,opened_at,status) "
+        "VALUES ('XAUUSD','long',4063,4055,'2026-11-06T08:25:00Z','open');")
+    c.commit()
+    c.close()
+    j = Journal(p)  # runs the migration
+    rows = j.all_trades()
+    assert len(rows) == 1 and rows[0].entry == 4063
+    assert rows[0].pending == 0 and rows[0].fill_time is None
+
+
 def test_manual_close_is_comparable_to_an_automatic_one(j: Journal) -> None:
     tid = j.add("XAUUSD", "long", 4055.0, 4048.0, 4083.0)
     assert j.close_manual(tid, 4063.0) is True

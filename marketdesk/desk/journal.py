@@ -34,9 +34,18 @@ CREATE TABLE IF NOT EXISTS trades (
     source TEXT, run_id TEXT,
     status TEXT NOT NULL DEFAULT 'open',
     result TEXT, exit_price REAL, bars INTEGER, r_multiple REAL,
-    closed_at TEXT, graded_at REAL
+    closed_at TEXT, graded_at REAL,
+    pending INTEGER NOT NULL DEFAULT 0, fill_time TEXT
 );
 """
+
+# Columns added after the first release. `CREATE TABLE IF NOT EXISTS` will not
+# touch an existing file, so a new column is added here rather than silently
+# missing on every store that predates it.
+MIGRATIONS = (
+    ("pending", "ALTER TABLE trades ADD COLUMN pending INTEGER NOT NULL DEFAULT 0"),
+    ("fill_time", "ALTER TABLE trades ADD COLUMN fill_time TEXT"),
+)
 
 
 @dataclass
@@ -59,6 +68,12 @@ class Trade:
     r_multiple: float | None
     closed_at: str | None = None
     graded_at: float | None = None
+    pending: int = 0
+    fill_time: str | None = None
+
+    @property
+    def is_pending(self) -> bool:
+        return bool(self.pending) and self.status == "open"
 
     @property
     def risk(self) -> float:
@@ -82,7 +97,10 @@ class Trade:
             head += f" · R:R {rr:.2f}"
         head += f" · مخاطرة {risk:.2f} نقطة"
         if self.status == "open":
-            tail = "  ⏳ مفتوحة"
+            if self.is_pending:
+                tail = "  ⏳ أمر معلّق — لسا ما تنفّذ"
+            else:
+                tail = "  ⏳ مفتوحة"
         elif self.result == "target":
             tail = f"  ✅ الهدف — {self.r_multiple:+.2f}R"
         elif self.result == "stop":
@@ -106,7 +124,16 @@ class Journal:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._conn()) as c:
             c.executescript(JOURNAL_SCHEMA)
+            self._migrate(c)
             c.commit()
+
+    def _migrate(self, c: sqlite3.Connection) -> None:
+        """Add columns a pre-existing store lacks. A schema change must not lose
+        the owner's record, so this is additive only -- never a drop or rewrite."""
+        have = {r["name"] for r in c.execute("PRAGMA table_info(trades)")}
+        for col, sql in MIGRATIONS:
+            if col not in have:
+                c.execute(sql)
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.path, timeout=30)
@@ -118,16 +145,22 @@ class Journal:
     def add(self, symbol: str, direction: str, entry: float, stop: float,
             target: float | None = None, size: float | None = None,
             opened_at: str | None = None, note: str | None = None,
-            source: str | None = None, run_id: str | None = None) -> int:
+            source: str | None = None, run_id: str | None = None,
+            pending: bool = False) -> int:
         """Record a trade. The stop is required: a trade without a stop cannot
-        be graded in R, and a trade that cannot be graded is a story."""
+        be graded in R, and a trade that cannot be graded is a story.
+
+        `pending=True` is a limit/stop order the market has not filled yet. It
+        is stored, but `grade` will not settle it until price actually reaches
+        the entry -- a target on an unfilled order is a plan, not a result."""
         opened_at = opened_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         with closing(self._conn()) as c:
             cur = c.execute(
                 "INSERT INTO trades (symbol, direction, entry, stop, target, size, "
-                "opened_at, note, source, run_id, status) VALUES (?,?,?,?,?,?,?,?,?,?,'open')",
+                "opened_at, note, source, run_id, status, pending) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,'open',?)",
                 (symbol.upper(), direction, entry, stop, target, size, opened_at,
-                 note, source, run_id))
+                 note, source, run_id, 1 if pending else 0))
             c.commit()
             return int(cur.lastrowid or 0)
 
@@ -203,7 +236,18 @@ class Journal:
             long = t.direction == "long"
             risk = abs(t.entry - t.stop)
             target = t.target
+            filled = not t.is_pending
             for n, (_i, b) in enumerate(window[:max_bars], 1):
+                if not filled:
+                    # A pending order is not a trade until price reaches it. Only
+                    # the ENTRY counts as the fill; a bar that reaches both the
+                    # entry and the stop is read as filled-then-stopped, the
+                    # conservative order.
+                    reached = (b["low"] <= t.entry) if long else (b["high"] >= t.entry)
+                    if not reached:
+                        continue
+                    filled = True
+                    self._mark_filled(t.id, b["open_time"])
                 hit_stop = (b["low"] <= t.stop) if long else (b["high"] >= t.stop)
                 hit_tgt = target is not None and (
                     (b["high"] >= target) if long else (b["low"] <= target))
@@ -217,6 +261,11 @@ class Journal:
                     settled += 1
                     break
         return settled
+
+    def _mark_filled(self, trade_id: int, fill_time: str) -> None:
+        """The order was reached: it is now a live trade, graded from here."""
+        self._do_write("UPDATE trades SET pending=0, fill_time=? WHERE id=?",
+                       (fill_time, trade_id))
 
     def _settle(self, trade_id: int, result: str, exit_price: float,
                 bars: int, r_multiple: float | None) -> None:
@@ -247,6 +296,7 @@ class Journal:
             "total_r": total_r,
             "profit_factor": (gross_win / gross_loss) if gross_loss else None,
             "open": len(self.open_trades()),
+            "pending": len([t for t in self.open_trades() if t.is_pending]),
         }
 
     def report(self, lang: str = "ar") -> str:
@@ -260,6 +310,12 @@ class Journal:
         for t in rows:
             L.append("  " + t.line())
         L.append("")
+        pending = [t for t in rows if t.is_pending]
+        live_open = [t for t in rows if t.status == "open" and not t.is_pending]
+        if pending:
+            L.append(f"⏳ أوامر معلّقة (ما تنفّذت بعد): {len(pending)}")
+        if live_open:
+            L.append(f"📈 صفقات مفتوحة: {len(live_open)}")
         if st.get("n"):
             pf = st.get("profit_factor")
             pf_s = f"{pf:.2f}" if pf is not None else "—"
@@ -267,12 +323,11 @@ class Journal:
                      f"{st['wins']} ربح / {st['losses']} خسارة "
                      f"({st['win_rate']:.0%}) · توقّع <b>{st['expectancy_r']:+.2f}R</b> "
                      f"· مجموع {st['total_r']:+.2f}R · معامل ربح {pf_s}")
-            if st.get("open"):
-                L.append(f"مفتوحة: {st['open']}")
             L.append("<i>التقييم بالـR مو بالنقاط — نسبة ربح عالية بمضاعف "
                      "صغير بتخسر فلوس.</i>")
         else:
-            L.append("<i>ما في صفقات مغلقة بعد — ما في حصيلة تُقاس.</i>")
+            L.append("<i>ما في صفقات مغلقة بعد — ما في حصيلة تُقاس. "
+                     "الأوامر المعلّقة ما بتنحسب لحد ما تنفّذ.</i>")
         return "\n".join(L)
 
 

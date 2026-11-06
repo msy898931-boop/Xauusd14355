@@ -159,7 +159,8 @@ def cmd_journal(args) -> int:
         tid = j.add(args.symbol or _settings(args).symbol, d, args.entry,
                     args.stop, args.target, args.size,
                     opened_at=getattr(args, "opened_at", None),
-                    note=args.note, source=args.source)
+                    note=args.note, source=args.source,
+                    pending=bool(getattr(args, "pending", False)))
         print(f"✅ انسجّلت الصفقة #{tid}")
         print("  " + j.all_trades()[-1].line())
         return 0
@@ -851,6 +852,9 @@ def build_parser() -> argparse.ArgumentParser:
     ja.add_argument("--opened-at", dest="opened_at", default=None,
                     help="ISO UTC time the trade was taken (default: now); "
                          "lets a trade recorded after the fact be graded on history")
+    ja.add_argument("--pending", action="store_true",
+                    help="a limit order the market has not filled yet; it is "
+                         "stored but not graded until price reaches the entry")
     ja.set_defaults(func=cmd_journal)
     jc = jsub.add_parser("close", help="close a trade by hand at a price")
     jc.add_argument("id", type=int)
