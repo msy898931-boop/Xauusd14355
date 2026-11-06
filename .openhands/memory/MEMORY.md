@@ -175,6 +175,35 @@ Detail for all of these lives in `MARKETDESK.md`; the daily log is `2026-11-02.m
   conviction). `from_scenarios` must get the owner's window + account, or the
   alert's stop won't match sizing.
 
+## MarketDesk — the always-on chart and the alert (2026-11-06)
+
+- ⭐ **Serving a directory serves everything under it.** The chart URL was
+  `http.server` from the repo root, so the owner's **trade journal**
+  (`marketdesk/data/journal.db`) and `.openhands/memory/MEMORY.md` both returned
+  **200** to anyone with the link, for hours before anyone noticed. Build into
+  `chart_live/` and serve that alone; private paths now 404. **A URL is a
+  capability** — what it may reach is a security decision, not a formatting one.
+- ⭐ **An alert whose line moves is not an alert.** Watching the desk's own 5m
+  scenario triggers made the "door" drift **4,073.15 → 4,071.65 → 4,070.67 in 40
+  minutes**, so it could fire and un-fire on its own. Watch **printed** levels
+  (pivots, stop clusters, round numbers), and read state from the **closed** bar
+  — same lesson as the open bar that started all this.
+- ⭐ **A rule that does not clear the spread is not a rule.** Simulated the
+  owner's own "buy on a 15m close over 4,071": 43 trades, 35% win, **+0.19
+  pts/trade before costs vs a 0.25-pt spread** (worse with wider stops). Measure
+  the rule he names *before* building the alert for it — and say "no edge".
+- ⭐ **4,071 is the middle, not a level.** Printed above: 4,073.15/4,076.38/
+  4,081.34; below: 4,068.35/4,067.40 (stop cluster)/4,065.89. A 4-pt stop under
+  it lands *on the cluster* — the stop is placed where price goes to hunt it.
+- **Telegram cannot deliver here** (`getMe` → Not Found, no chat id;
+  `desk telegram` → UNREADABLE) though `available` reads True. Alerts go where
+  the owner already looks (chart banner + `alerts.log`), not a promise.
+- **Check the JS, do not eyeball it.** Node was available; stubbing `document`
+  proved the banner goes green only on a real trigger.
+- `chart_server.py` loops gather→rebuild→sleep (`CHART_REFRESH_S`, 120s) into
+  `chart_live/`; a failed pass logs and retries. Verified 296 tests, mypy 50
+  files, ruff clean. Commits `b1efa58` · `3b2119d` · `21ce3f0`.
+
 ## MarketDesk — Phase 0 closed + the acceptance scoreboard (2026-11-02, late)
 
 - ⭐ **An acceptance criterion is a computation or it is decoration.** The plan
